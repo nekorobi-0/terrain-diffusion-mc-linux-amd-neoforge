@@ -84,8 +84,8 @@ public final class TerrainDiffusionDensityFunction implements DensityFunction.Si
         TILE_CACHE.set(new TileCache(cacheEpoch, startX, startZ, data));
     }
 
-    @Override public double minValue() { return -64; }
-    @Override public double maxValue() { return 1024; }
+    @Override public double minValue() { return -2032; }
+    @Override public double maxValue() { return 2032; }
     @Override public KeyDispatchDataCodec<? extends DensityFunction> codec() { return CODEC_HOLDER; }
 
     private record TileCache(long epoch, int startX, int startZ, LocalTerrainProvider.HeightmapData data) {
