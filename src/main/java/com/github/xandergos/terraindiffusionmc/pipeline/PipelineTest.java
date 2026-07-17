@@ -46,13 +46,16 @@ public class PipelineTest {
     public static void main(String[] args) throws Exception {
         long seed = -5408366058459925370L;
         int scale = 2;
-        int TILE_SIZE = 256;
+        int tileSize = Integer.getInteger("terrain_diffusion.benchmark_tile_size", 256);
+        if (tileSize <= 0 || (tileSize & (tileSize - 1)) != 0) {
+            throw new IllegalArgumentException("terrain_diffusion.benchmark_tile_size must be a positive power of two");
+        }
 
         int blockX = -16160, blockZ = -59510;
-        int blockStartX = (blockX >> 8) << 8;
-        int blockStartZ = (blockZ >> 8) << 8;
-        int blockEndX = blockStartX + TILE_SIZE;
-        int blockEndZ = blockStartZ + TILE_SIZE;
+        int blockStartX = Math.floorDiv(blockX, tileSize) * tileSize;
+        int blockStartZ = Math.floorDiv(blockZ, tileSize) * tileSize;
+        int blockEndX = blockStartX + tileSize;
+        int blockEndZ = blockStartZ + tileSize;
 
         System.out.printf("blockStart: X=%d Z=%d  blockEnd: X=%d Z=%d%n",
                 blockStartX, blockStartZ, blockEndX, blockEndZ);
@@ -86,7 +89,17 @@ public class PipelineTest {
         monitor.start();
 
         try (WorldPipeline pipeline = new WorldPipeline(seed)) {
+            pipeline.resetModelRunTiming();
+            long inferenceStart = System.nanoTime();
             float[] elevNative = pipeline.get(i1p, j1p, i2p, j2p, false)[0];
+            long inferenceElapsedNanos = System.nanoTime() - inferenceStart;
+            System.out.printf("Uncached pipeline generation: %.3f s%n", inferenceElapsedNanos / 1_000_000_000.0);
+            System.out.println("ONNX stage timing: " + pipeline.getModelRunTimingSummary());
+
+            long cachedStart = System.nanoTime();
+            pipeline.get(i1p, j1p, i2p, j2p, false);
+            long cachedElapsedNanos = System.nanoTime() - cachedStart;
+            System.out.printf("Cached pipeline retrieval: %.3f s%n", cachedElapsedNanos / 1_000_000_000.0);
 
             float[][] native2D = new float[nH][nW];
             for (int r = 0; r < nH; r++)

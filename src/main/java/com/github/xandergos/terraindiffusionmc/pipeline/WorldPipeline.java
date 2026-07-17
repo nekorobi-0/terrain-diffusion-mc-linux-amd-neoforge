@@ -461,6 +461,25 @@ public final class WorldPipeline implements AutoCloseable {
         return tileStore.getTotalComputedWindowCount();
     }
 
+    /** Resets per-model ONNX run counters used by the local benchmark harness. */
+    public void resetModelRunTiming() {
+        coarseModel.resetRunTiming();
+        baseModel.resetRunTiming();
+        decoderModel.resetRunTiming();
+    }
+
+    /** Returns the ONNX run count and elapsed time for each pipeline stage. */
+    public String getModelRunTimingSummary() {
+        return formatModelTiming("coarse", coarseModel) + ", "
+                + formatModelTiming("base", baseModel) + ", "
+                + formatModelTiming("decoder", decoderModel);
+    }
+
+    private static String formatModelTiming(String label, OnnxModel model) {
+        return label + "=" + model.getRunCount() + " runs/"
+                + String.format(java.util.Locale.ROOT, "%.3f s", model.getTotalRunNanos() / 1_000_000_000.0);
+    }
+
     /**
      * Returns a coarse tensor slice with shape [7, ci1-ci0, cj1-cj0].
      * Coordinates are in coarse index units (1 unit = 256 native pixels).

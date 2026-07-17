@@ -19,6 +19,7 @@ import java.lang.reflect.Method;
 import java.util.Map;
 import java.util.Locale;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Thin wrapper around ONNX Runtime with aggressive VRAM optimization.
@@ -37,6 +38,9 @@ public final class OnnxModel implements AutoCloseable {
     private static final AtomicBoolean providerLoggedOnce = new AtomicBoolean(false);
     private static final AtomicBoolean cudaWarnLoggedOnce = new AtomicBoolean(false);
     private static final AtomicBoolean dmlWarnLoggedOnce = new AtomicBoolean(false);
+    private static final boolean PROFILE_RUNS = Boolean.getBoolean("terrain_diffusion.profile_inference");
+    private final AtomicLong runCount = new AtomicLong();
+    private final AtomicLong totalRunNanos = new AtomicLong();
     private static final AtomicBoolean noGpuWarnLoggedOnce = new AtomicBoolean(false);
 
     // GPU slot: when offload_models=true, only one session is alive at a time.
@@ -268,16 +272,37 @@ public final class OnnxModel implements AutoCloseable {
      * @return the output tensor as a flat float array
      */
     public float[] run(Object[][] inputs) {
-        if (cpuSession != null) {
-            return runWithSession(cpuSession, inputs);
+        long start = PROFILE_RUNS ? System.nanoTime() : 0L;
+        try {
+            if (cpuSession != null) {
+                return runWithSession(cpuSession, inputs);
+            }
+            if (gpuSession != null) {
+                return runWithSession(gpuSession, inputs);
+            }
+            synchronized (GPU_SLOT_LOCK) {
+                claimGpuSlot();
+                return runWithSession(activeGpuSession, inputs);
+            }
+        } finally {
+            if (PROFILE_RUNS) {
+                totalRunNanos.addAndGet(System.nanoTime() - start);
+                runCount.incrementAndGet();
+            }
         }
-        if (gpuSession != null) {
-            return runWithSession(gpuSession, inputs);
-        }
-        synchronized (GPU_SLOT_LOCK) {
-            claimGpuSlot();
-            return runWithSession(activeGpuSession, inputs);
-        }
+    }
+
+    public void resetRunTiming() {
+        runCount.set(0L);
+        totalRunNanos.set(0L);
+    }
+
+    public long getRunCount() {
+        return runCount.get();
+    }
+
+    public long getTotalRunNanos() {
+        return totalRunNanos.get();
     }
 
     /** Convenience: run with x, noise_labels, and optional cond tensors. */
