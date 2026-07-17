@@ -125,3 +125,5 @@ bin/
 .cursor/
 .vscode/
 libs/
+.gpu-runtime/
+logs/

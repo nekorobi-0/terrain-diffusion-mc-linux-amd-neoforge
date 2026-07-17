@@ -1,6 +1,6 @@
 package com.github.xandergos.terraindiffusionmc.config;
 
-import net.fabricmc.loader.api.FabricLoader;
+import net.neoforged.fml.loading.FMLPaths;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -16,6 +16,10 @@ public final class TerrainDiffusionConfig {
     private static final String DEFAULT_INFERENCE_PROVIDER = "auto";
     private static final String BUILD_VARIANT = readBuildVariant();
     private static final boolean DEFAULT_OFFLOAD_MODELS = true;
+    private static final int DEFAULT_ONNX_INTRA_OP_THREADS = 1;
+    private static final int DEFAULT_ONNX_INTER_OP_THREADS = 1;
+    private static final boolean DEFAULT_MIGRAPHX_FP16 = true;
+    private static final boolean DEFAULT_PERFORMANCE_MODE = false;
     private static final boolean DEFAULT_VALIDATE_MODEL = true;
     private static final int DEFAULT_EXPLORER_PORT = 19801;
     private static final int DEFAULT_TILE_SIZE = 256;
@@ -57,6 +61,47 @@ public final class TerrainDiffusionConfig {
     /** Whether to offload inactive models from VRAM between pipeline stages. */
     public static boolean offloadModels() {
         return readBoolean("inference.offload_models", DEFAULT_OFFLOAD_MODELS);
+    }
+
+    /** CPU workers used by ONNX Runtime around GPU submissions. */
+    public static int onnxIntraOpThreads() {
+        return readPositiveInt("inference.onnx_intra_op_threads", DEFAULT_ONNX_INTRA_OP_THREADS);
+    }
+
+    /** Parallel ONNX graph workers. The terrain pipeline submits one model run at a time. */
+    public static int onnxInterOpThreads() {
+        return readPositiveInt("inference.onnx_inter_op_threads", DEFAULT_ONNX_INTER_OP_THREADS);
+    }
+
+    /** Use the RX 7900 XTX FP16 path when MIGraphX is selected. */
+    public static boolean migraphxFp16() {
+        return readBoolean("inference.migraphx_fp16", DEFAULT_MIGRAPHX_FP16);
+    }
+
+    /** Directory for MIGraphX compiled-shape artifacts, or null to disable persistent caching. */
+    public static String migraphxModelCachePath() {
+        String configuredPath = PROPERTIES.getProperty("inference.migraphx_model_cache_path");
+        Path cachePath;
+        if (configuredPath != null && !configuredPath.isBlank()) {
+            cachePath = Path.of(configuredPath.trim());
+        } else {
+            try {
+                cachePath = FMLPaths.GAMEDIR.get().resolve("terrain-diffusion-models").resolve("migraphx-cache");
+            } catch (RuntimeException ignored) {
+                return null;
+            }
+        }
+        try {
+            Files.createDirectories(cachePath);
+            return cachePath.toAbsolutePath().toString();
+        } catch (IOException ignored) {
+            return null;
+        }
+    }
+
+    /** Reduce tile overlap to lower repeated model inference at the cost of less seam blending. */
+    public static boolean performanceMode() {
+        return readBoolean("generation.performance_mode", DEFAULT_PERFORMANCE_MODE);
     }
 
     /** TCP port for the local terrain explorer HTTP server. */
@@ -104,10 +149,14 @@ public final class TerrainDiffusionConfig {
     }
 
     private static Path resolveConfigPath() {
+        String overriddenConfigPath = System.getProperty("terrain_diffusion.config_file");
+        if (overriddenConfigPath != null && !overriddenConfigPath.isBlank()) {
+            return Path.of(overriddenConfigPath).toAbsolutePath();
+        }
         try {
-            return FabricLoader.getInstance().getConfigDir().resolve(FILE_NAME);
+            return FMLPaths.CONFIGDIR.get().resolve(FILE_NAME);
         } catch (RuntimeException e) {
-            System.err.println("Fabric Loader config directory unavailable: " + e.getMessage());
+            System.err.println("NeoForge config directory unavailable: " + e.getMessage());
             return null;
         }
     }
@@ -155,6 +204,11 @@ public final class TerrainDiffusionConfig {
             System.err.println("Invalid int for " + key + ": " + value + ", using default " + defaultValue);
             return defaultValue;
         }
+    }
+
+    private static int readPositiveInt(String key, int defaultValue) {
+        int value = readInt(key, defaultValue);
+        return value > 0 ? value : defaultValue;
     }
 
     private static boolean isPowerOfTwo(int value) {

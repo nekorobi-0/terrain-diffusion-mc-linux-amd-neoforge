@@ -69,6 +69,13 @@ public final class OnnxModel implements AutoCloseable {
             configureOnnxRuntimeNativePath();
             this.env = OrtEnvironment.getEnvironment(OrtLoggingLevel.ORT_LOGGING_LEVEL_ERROR);
             byte[] sourceModelBytes = Files.readAllBytes(modelFilePath);
+            if (!"cpu".equals(TerrainDiffusionConfig.inferenceDevice())) {
+                // CPU-created optimized models can contain NCHWC layout nodes. MIGraphX cannot
+                // claim those nodes, so use the original graph and let the GPU EP partition it.
+                initializeModelSession(sourceModelBytes, start);
+                this.optimizedModelBytes = sourceModelBytes;
+                return;
+            }
             OptimizedModelLoadResult initialOptimizedModelLoadResult = optimizeModelAtRuntime(sourceModelBytes, false);
             byte[] loadedModelBytes;
             try {
@@ -108,6 +115,7 @@ public final class OnnxModel implements AutoCloseable {
             Path temporaryOptimizedModelPath = optimizedModelPath.resolveSibling(optimizedModelPath.getFileName() + ".tmp");
             Files.deleteIfExists(temporaryOptimizedModelPath);
             OrtSession.SessionOptions optimizationOptions = new OrtSession.SessionOptions();
+            configureSessionThreading(optimizationOptions);
             optimizationOptions.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.EXTENDED_OPT);
             optimizationOptions.setOptimizedModelFilePath(temporaryOptimizedModelPath.toAbsolutePath().toString());
             try (OrtSession ignored = env.createSession(sourceModelBytes, optimizationOptions)) {
@@ -151,6 +159,7 @@ public final class OnnxModel implements AutoCloseable {
     private void initializeModelSession(byte[] modelBytes, long startMillis) throws OrtException {
         if ("cpu".equals(TerrainDiffusionConfig.inferenceDevice())) {
             OrtSession.SessionOptions sessionOptions = new OrtSession.SessionOptions();
+            configureSessionThreading(sessionOptions);
             sessionOptions.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT);
             this.cpuSession = env.createSession(modelBytes, sessionOptions);
             this.gpuSession = null;
@@ -161,7 +170,8 @@ public final class OnnxModel implements AutoCloseable {
         }
         if (!TerrainDiffusionConfig.offloadModels()) {
             OrtSession.SessionOptions sessionOptions = new OrtSession.SessionOptions();
-            sessionOptions.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT);
+            configureSessionThreading(sessionOptions);
+            sessionOptions.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.EXTENDED_OPT);
             addGpuProvider(sessionOptions);
             this.gpuSession = env.createSession(modelBytes, sessionOptions);
             this.cpuSession = null;
@@ -301,7 +311,8 @@ public final class OnnxModel implements AutoCloseable {
 
         try {
             OrtSession.SessionOptions opts = new OrtSession.SessionOptions();
-            opts.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT);
+            configureSessionThreading(opts);
+            opts.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.EXTENDED_OPT);
             addGpuProvider(opts);
             activeGpuSession = env.createSession(optimizedModelBytes, opts);
             gpuSlotHolder = this;
@@ -332,6 +343,18 @@ public final class OnnxModel implements AutoCloseable {
             LOG.info("Terrain diffusion inference: CPU (fallback)");
             LOG.warn("No GPU provider loaded. Check drivers and that the mod jar is the GPU build.");
         }
+    }
+
+    /**
+     * The terrain provider serializes inference itself. Leaving ORT at its automatic
+     * thread count creates a full CPU worker pool per resident model and can starve
+     * the game even when every model node executes on MIGraphX.
+     */
+    private static void configureSessionThreading(OrtSession.SessionOptions opts) throws OrtException {
+        opts.setIntraOpNumThreads(TerrainDiffusionConfig.onnxIntraOpThreads());
+        opts.setInterOpNumThreads(TerrainDiffusionConfig.onnxInterOpThreads());
+        opts.addConfigEntry("session.intra_op.allow_spinning", "0");
+        opts.addConfigEntry("session.inter_op.allow_spinning", "0");
     }
 
     private static List<String> resolveProviderOrder(String configuredProvider) {
@@ -382,8 +405,14 @@ public final class OnnxModel implements AutoCloseable {
 
     private static boolean tryAddMigraphxProvider(OrtSession.SessionOptions opts) {
         try {
-            Method addMigraphxMethod = opts.getClass().getMethod("addMIGraphX", int.class);
-            addMigraphxMethod.invoke(opts, 0);
+            Method addMigraphxMethod = opts.getClass().getMethod(
+                    "addMIGraphX", int.class, boolean.class, String.class);
+            addMigraphxMethod.invoke(
+                    opts,
+                    0,
+                    TerrainDiffusionConfig.migraphxFp16(),
+                    TerrainDiffusionConfig.migraphxModelCachePath());
+            setResolvedProviderOnce("MIGraphX");
             LOG.info("Terrain diffusion inference: GPU (MIGraphX)");
             return true;
         } catch (NoSuchMethodException noSuchMethodException) {
@@ -440,7 +469,7 @@ public final class OnnxModel implements AutoCloseable {
         }
     }
 
-    private static float[] runWithSession(OrtSession session, Object[][] inputs) {
+    private float[] runWithSession(OrtSession session, Object[][] inputs) {
         Map<String, OnnxTensor> feed = new LinkedHashMap<>();
         OrtEnvironment env = OrtEnvironment.getEnvironment();
         try {

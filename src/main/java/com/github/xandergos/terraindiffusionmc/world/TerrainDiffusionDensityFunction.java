@@ -2,72 +2,30 @@ package com.github.xandergos.terraindiffusionmc.world;
 
 import com.github.xandergos.terraindiffusionmc.config.TerrainDiffusionConfig;
 import com.github.xandergos.terraindiffusionmc.pipeline.LocalTerrainProvider;
-import com.github.xandergos.terraindiffusionmc.pipeline.LocalTerrainProvider.HeightmapData;
 import com.mojang.serialization.MapCodec;
-import net.minecraft.util.dynamic.CodecHolder;
-import net.minecraft.world.gen.densityfunction.DensityFunction;
+import net.minecraft.util.KeyDispatchDataCodec;
+import net.minecraft.world.level.levelgen.DensityFunction;
 
-public class TerrainDiffusionDensityFunction implements DensityFunction {
-    public static final MapCodec<TerrainDiffusionDensityFunction> CODEC =
-            MapCodec.unit(TerrainDiffusionDensityFunction::new);
-
-    public static final CodecHolder<TerrainDiffusionDensityFunction> CODEC_HOLDER = CodecHolder.of(CODEC);
+public final class TerrainDiffusionDensityFunction implements DensityFunction.SimpleFunction {
+    public static final MapCodec<TerrainDiffusionDensityFunction> CODEC = MapCodec.unit(TerrainDiffusionDensityFunction::new);
+    public static final KeyDispatchDataCodec<TerrainDiffusionDensityFunction> CODEC_HOLDER = KeyDispatchDataCodec.of(CODEC);
 
     @Override
-    public double sample(DensityFunction.NoisePos pos) {
-        return compute(pos);
-    }
-
-    public double compute(DensityFunction.NoisePos context) {
+    public double compute(FunctionContext context) {
         int x = context.blockX();
         int z = context.blockZ();
         int y = context.blockY();
-
-        int tileSize = TerrainDiffusionConfig.tileSize();
-        int tileShift = Integer.numberOfTrailingZeros(tileSize);
-
-        int tileX = x >> tileShift;
-        int tileZ = z >> tileShift;
-
-        int blockStartX = tileX << tileShift;
-        int blockStartZ = tileZ << tileShift;
-        int blockEndX = blockStartX + tileSize;
-        int blockEndZ = blockStartZ + tileSize;
-
-        HeightmapData data = LocalTerrainProvider.getInstance().fetchHeightmap(blockStartZ, blockStartX, blockEndZ, blockEndX);
-        if (data == null || data.heightmap == null) {
-            return -y;
-        }
-
-        int localX = Math.max(0, Math.min(data.width  - 1, x - blockStartX));
-        int localZ = Math.max(0, Math.min(data.height - 1, z - blockStartZ));
-
-        int targetHeight = HeightConverter.convertToMinecraftHeight(data.heightmap[localZ][localX]);
-        return targetHeight - y;
+        int tileShift = Integer.numberOfTrailingZeros(TerrainDiffusionConfig.tileSize());
+        int startX = (x >> tileShift) << tileShift;
+        int startZ = (z >> tileShift) << tileShift;
+        LocalTerrainProvider.HeightmapData data = LocalTerrainProvider.getInstance().fetchHeightmap(startZ, startX, startZ + TerrainDiffusionConfig.tileSize(), startX + TerrainDiffusionConfig.tileSize());
+        if (data == null || data.heightmap == null) return -y;
+        int localX = Math.max(0, Math.min(data.width - 1, x - startX));
+        int localZ = Math.max(0, Math.min(data.height - 1, z - startZ));
+        return HeightConverter.convertToMinecraftHeight(data.heightmap[localZ][localX]) - y;
     }
 
-    @Override
-    public void fill(double[] densities, DensityFunction.EachApplier applier) {
-        applier.fill(densities, this);
-    }
-
-    @Override
-    public DensityFunction apply(DensityFunction.DensityFunctionVisitor visitor) {
-        return visitor.apply(this);
-    }
-
-    @Override
-    public double minValue() {
-        return -64;
-    }
-
-    @Override
-    public double maxValue() {
-        return 1024;
-    }
-
-    @Override
-    public CodecHolder<? extends DensityFunction> getCodecHolder() {
-        return CODEC_HOLDER;
-    }
+    @Override public double minValue() { return -64; }
+    @Override public double maxValue() { return 1024; }
+    @Override public KeyDispatchDataCodec<? extends DensityFunction> codec() { return CODEC_HOLDER; }
 }

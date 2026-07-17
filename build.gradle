@@ -1,34 +1,25 @@
 plugins {
-    id 'fabric-loom' version '1.13-SNAPSHOT'
+    id 'java-library'
     id 'maven-publish'
+    id 'net.neoforged.gradle.userdev' version '7.1.38'
 }
 
 import groovy.json.JsonOutput
 import groovy.json.JsonSlurper
 import java.security.MessageDigest
 
-def useCuda = project.hasProperty('useCuda') && project.property('useCuda').toString().toLowerCase() == 'true'
-def useDml = project.hasProperty('useDml') && project.property('useDml').toString().toLowerCase() == 'true'
-def useCpu = project.hasProperty('useCpu') && project.property('useCpu').toString().toLowerCase() == 'true'
-def useMigraphx = project.hasProperty('useMigraphx') && project.property('useMigraphx').toString().toLowerCase() == 'true'
-def withSourcesJar = project.hasProperty('withSourcesJar') && project.property('withSourcesJar').toString().toLowerCase() == 'true'
-def onnxRuntimeVersion = project.hasProperty('onnxRuntimeVersion')
-        ? project.property('onnxRuntimeVersion').toString()
-        : '1.20.0'
-def onnxRuntimeMigraphxVersion = project.hasProperty('onnxRuntimeMigraphxVersion')
-        ? project.property('onnxRuntimeMigraphxVersion').toString()
-        : '1.23.2-migraphxfix'
+def useCuda = project.hasProperty('useCuda') && project.property('useCuda').toString().toBoolean()
+def useDml = project.hasProperty('useDml') && project.property('useDml').toString().toBoolean()
+def useCpu = project.hasProperty('useCpu') && project.property('useCpu').toString().toBoolean()
+def useMigraphx = project.hasProperty('useMigraphx') && project.property('useMigraphx').toString().toBoolean()
+def withSourcesJar = project.hasProperty('withSourcesJar') && project.property('withSourcesJar').toString().toBoolean()
+def onnxRuntimeVersion = project.findProperty('onnxRuntimeVersion') ?: '1.20.0'
+def onnxRuntimeMigraphxVersion = project.findProperty('onnxRuntimeMigraphxVersion') ?: '1.23.2-migraphxfix'
 
 if ([useCuda, useDml, useCpu, useMigraphx].count { it } > 1) {
-    throw new GradleException("Only one of -PuseCuda, -PuseDml, -PuseCpu, or -PuseMigraphx may be specified at a time.")
+    throw new GradleException('Only one inference runtime variant may be specified.')
 }
 if (!useDml && !useCpu && !useCuda && !useMigraphx) useDml = true
-
-println "Build variant: ${useCuda ? 'CUDA' : useDml ? 'DirectML (Windows)' : useMigraphx ? 'Linux AMD MIGraphX' : 'CPU'}"
-def modelRepositorySlug = 'xandergos/terrain-diffusion-30m-onnx'
-def modelRepositoryRevision = 'ad2df557eca5645f588766101cf3bc3682455c3e'
-def generatedManifestDirectory = layout.buildDirectory.dir('generated/model-assets').get().asFile
-def generatedManifestFile = new File(generatedManifestDirectory, 'model-assets-manifest.json')
 
 def buildVariant = useCuda ? 'cuda' : useDml ? 'windows' : useMigraphx ? 'linux-amd' : 'cpu'
 version = "${project.mod_version}-${buildVariant}+${project.minecraft_version}"
@@ -38,217 +29,115 @@ base {
     archivesName = project.archives_base_name
 }
 
-loom {
-    splitEnvironmentSourceSets()
-
-    mods {
-        "terrain-diffusion-mc" {
-            sourceSet sourceSets.main
-            sourceSet sourceSets.client
-        }
-    }
-
-    runs {
-        configureEach {
-            ideConfigGenerated true
-        }
-    }
-}
-
-fabricApi {
-    configureDataGeneration {
-        client = true
+sourceSets {
+    main {
+        java.srcDir 'src/client/java'
+        resources.srcDir 'src/client/resources'
+        java.exclude 'com/github/xandergos/terraindiffusionmc/client/TerrainDiffusionMcDataGenerator.java'
     }
 }
 
 repositories {
-    // Add repositories to retrieve artifacts from in here.
-    // You should only use this when depending on other mods because
-    // Loom adds the essential maven repositories to download Minecraft and libraries from automatically.
-    // See https://docs.gradle.org/current/userguide/declaring_repositories.html
-    // for more information about repositories.
     mavenLocal()
-    flatDir { dirs 'libs'}
+    flatDir { dirs 'libs' }
+}
+
+runs {
+    configureEach {
+        workingDirectory project.layout.projectDirectory.dir('run').dir(name)
+        modSource sourceSets.main
+        systemProperty 'log4j2.configurationFile', rootProject.file('log4j2-dev.xml').absolutePath
+    }
+    server { argument '--nogui' }
 }
 
 dependencies {
-    // To change the versions see the gradle.properties file
-    minecraft "com.mojang:minecraft:${project.minecraft_version}"
-    mappings "net.fabricmc:yarn:${project.yarn_mappings}:v2"
-    modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
-
-    modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
+    implementation "net.neoforged:neoforge:${project.neo_version}"
 
     if (useCuda) {
-        implementation "com.microsoft.onnxruntime:onnxruntime_gpu:${onnxRuntimeVersion}"
-        include "com.microsoft.onnxruntime:onnxruntime_gpu:${onnxRuntimeVersion}"
+        jarJar(implementation("com.microsoft.onnxruntime:onnxruntime_gpu:${onnxRuntimeVersion}"))
     } else if (useMigraphx) {
-        implementation "com.microsoft.onnxruntime:onnxruntime:${onnxRuntimeMigraphxVersion}"
-        include "com.microsoft.onnxruntime:onnxruntime:${onnxRuntimeMigraphxVersion}"
+        jarJar(implementation("com.microsoft.onnxruntime:onnxruntime:${onnxRuntimeMigraphxVersion}"))
     } else if (useCpu) {
-        implementation "com.microsoft.onnxruntime:onnxruntime:${onnxRuntimeVersion}"
-        include "com.microsoft.onnxruntime:onnxruntime:${onnxRuntimeVersion}"
-    } else if (useDml) {
-        implementation 'com.microsoft.onnxruntime:onnxruntime-dml:1.0'
-        include 'com.microsoft.onnxruntime:onnxruntime-dml:1.0'
+        jarJar(implementation("com.microsoft.onnxruntime:onnxruntime:${onnxRuntimeVersion}"))
+    } else {
+        jarJar(implementation('com.microsoft.onnxruntime:onnxruntime-dml:1.0'))
     }
 }
+
+def modelRepositorySlug = 'xandergos/terrain-diffusion-30m-onnx'
+def modelRepositoryRevision = 'ad2df557eca5645f588766101cf3bc3682455c3e'
+def generatedManifestDirectory = layout.buildDirectory.dir('generated/model-assets').get().asFile
+def generatedManifestFile = new File(generatedManifestDirectory, 'model-assets-manifest.json')
 
 processResources {
     dependsOn 'generateModelAssetManifest'
-    inputs.property "version", project.version
-    inputs.property "minecraft_version", project.minecraft_version
-    inputs.property "loader_version", project.loader_version
-    inputs.property "build_variant", buildVariant
-    filteringCharset "UTF-8"
-    from(generatedManifestFile) {
-        into ''
+    inputs.properties(version: project.version, minecraft_version: project.minecraft_version,
+            neo_version: project.neo_version, build_variant: buildVariant)
+    filteringCharset = 'UTF-8'
+    from(generatedManifestFile)
+    filesMatching('META-INF/neoforge.mods.toml') {
+        expand version: project.version, minecraft_version: project.minecraft_version, neo_version: project.neo_version
     }
-
-    filesMatching("fabric.mod.json") {
-        expand "version": project.version,
-                "minecraft_version": project.minecraft_version,
-                "loader_version": project.loader_version
-    }
-    filesMatching("build-variant.properties") {
-        expand "build_variant": buildVariant
-    }
-}
-
-def targetJavaVersion = 21
-tasks.withType(JavaCompile).configureEach {
-    // ensure that the encoding is set to UTF-8, no matter what the system default is
-    // this fixes some edge cases with special characters not displaying correctly
-    // see http://yodaconditions.net/blog/fix-for-java-file-encoding-problems-with-gradle.html
-    // If Javadoc is generated, this must be specified in that task too.
-    it.options.encoding = "UTF-8"
-    if (targetJavaVersion >= 10 || JavaVersion.current().isJava10Compatible()) {
-        it.options.release.set(targetJavaVersion)
+    filesMatching('build-variant.properties') {
+        expand build_variant: buildVariant
     }
 }
 
 java {
-    def javaVersion = JavaVersion.toVersion(targetJavaVersion)
-    sourceCompatibility = javaVersion
-    targetCompatibility = javaVersion
-    // Only use toolchain if current Java version is less than target
-    // Commented out toolchain to avoid detection issues when Java 21 is already installed
-    // if (JavaVersion.current() < javaVersion) {
-    //     toolchain.languageVersion = JavaLanguageVersion.of(targetJavaVersion)
-    // }
-    // Loom attaches RemapSourcesJar to "build" when this is enabled. Off by default; use -PwithSourcesJar=true.
-    if (withSourcesJar) {
-        withSourcesJar()
-    }
+    toolchain.languageVersion = JavaLanguageVersion.of(21)
+    if (withSourcesJar) withSourcesJar()
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+    options.release = 21
 }
 
 jar {
-    from("LICENSE") {
+    from('LICENSE.txt') {
         rename { "${it}_${project.archivesBaseName}" }
     }
 }
 
-tasks.withType(JavaExec).configureEach {
-    systemProperty 'log4j2.configurationFile', rootProject.file('log4j2-dev.xml').absolutePath
-}
-
-// configure the maven publication
-publishing {
-    publications {
-        create("mavenJava", MavenPublication) {
-            artifactId = project.archives_base_name
-            from components.java
-        }
-    }
-
-    // See https://docs.gradle.org/current/userguide/publishing_maven.html for information on how to set up publishing.
-    repositories {
-        // Add repositories to publish to here.
-        // Notice: This block does NOT have the same function as the block in the top level.
-        // The repositories here will be used for publishing your artifact, not for
-        // retrieving dependencies.
-    }
-}
-
-task pipelineTest(type: JavaExec, dependsOn: compileJava) {
+task pipelineTest(type: JavaExec, dependsOn: classes) {
     classpath = sourceSets.main.runtimeClasspath
     mainClass = 'com.github.xandergos.terraindiffusionmc.pipeline.PipelineTest'
     jvmArgs '-Xmx8g'
+    if (project.hasProperty('pipelineProfileJfr')) {
+        jvmArgs "-XX:StartFlightRecording=filename=${project.property('pipelineProfileJfr')},settings=profile,dumponexit=true"
+    }
 }
 
 tasks.register('generateModelAssetManifest') {
-    inputs.property('modelRepositorySlug', modelRepositorySlug)
-    inputs.property('modelRepositoryRevision', modelRepositoryRevision)
+    inputs.properties(modelRepositorySlug: modelRepositorySlug, modelRepositoryRevision: modelRepositoryRevision)
     outputs.file(generatedManifestFile)
-
     doLast {
         generatedManifestDirectory.mkdirs()
-
-        String apiUrl = "https://huggingface.co/api/models/${modelRepositorySlug}/revision/${modelRepositoryRevision}?blobs=true"
-        Map modelInfo = new JsonSlurper().parseText(new URL(apiUrl).getText('UTF-8')) as Map
+        Map modelInfo = new JsonSlurper().parseText(new URL("https://huggingface.co/api/models/${modelRepositorySlug}/revision/${modelRepositoryRevision}?blobs=true").getText('UTF-8'))
         List siblings = modelInfo.siblings as List
-
-        List<String> requiredFiles = [
-                'base_model.onnx',
-                'coarse_model.onnx',
-                'decoder_model.onnx',
-                'pipeline_data.json',
-                'world_pipeline_config.json'
-        ]
-
-        Map<String, Object> assetEntries = [:]
-        for (String requiredFileName : requiredFiles) {
-            Map siblingEntry = siblings.find { it.rfilename == requiredFileName } as Map
-            if (siblingEntry == null) {
-                throw new GradleException("Required model asset missing from HF commit ${modelRepositoryRevision}: ${requiredFileName}")
-            }
-
-            String resolveUrl = "https://huggingface.co/${modelRepositorySlug}/resolve/${modelRepositoryRevision}/${requiredFileName}?download=true"
-            long expectedSizeBytes = ((Number) siblingEntry.size).longValue()
-            String expectedSha256
-            if (siblingEntry.lfs instanceof Map && siblingEntry.lfs.sha256 != null) {
-                expectedSha256 = siblingEntry.lfs.sha256 as String
-            } else {
-                byte[] remoteFileBytes = new URL(resolveUrl).bytes
-                expectedSha256 = sha256Hex(remoteFileBytes)
-            }
-
-            assetEntries[requiredFileName] = [
-                    sha256: expectedSha256,
-                    sizeBytes: expectedSizeBytes,
-                    url: resolveUrl
-            ]
+        Map<String, Object> assets = [:]
+        ['base_model.onnx', 'coarse_model.onnx', 'decoder_model.onnx', 'pipeline_data.json', 'world_pipeline_config.json'].each { name ->
+            Map sibling = siblings.find { it.rfilename == name } as Map
+            if (sibling == null) throw new GradleException("Required model asset missing: ${name}")
+            String url = "https://huggingface.co/${modelRepositorySlug}/resolve/${modelRepositoryRevision}/${name}?download=true"
+            String sha256 = sibling.lfs instanceof Map && sibling.lfs.sha256 != null ? sibling.lfs.sha256 : sha256Hex(new URL(url).bytes)
+            assets[name] = [sha256: sha256, sizeBytes: ((Number) sibling.size).longValue(), url: url]
         }
-
-        Map<String, Object> manifestPayload = [
-                repositorySlug: modelRepositorySlug,
-                revision: modelRepositoryRevision,
-                assets: assetEntries
-        ]
-        generatedManifestFile.text = JsonOutput.prettyPrint(JsonOutput.toJson(manifestPayload))
+        generatedManifestFile.text = JsonOutput.prettyPrint(JsonOutput.toJson([repositorySlug: modelRepositorySlug, revision: modelRepositoryRevision, assets: assets]))
     }
 }
 
-def isWindows = System.getProperty('os.name').toLowerCase().startsWith('windows')
-def gradlewExecutable = rootProject.file(isWindows ? 'gradlew.bat' : 'gradlew').absolutePath
+tasks.register('buildCuda', Exec) { commandLine './gradlew', 'build', '-PuseCuda=true' }
+tasks.register('buildDml', Exec) { commandLine './gradlew', 'build', '-PuseDml=true' }
+tasks.register('buildCpu', Exec) { commandLine './gradlew', 'build', '-PuseCpu=true' }
+tasks.register('buildAll') { dependsOn 'buildCuda', 'buildDml', 'buildCpu' }
 
-['Cuda', 'Dml', 'Cpu'].each { variant ->
-    tasks.register("build${variant}", Exec) {
-        workingDir rootProject.projectDir
-        commandLine gradlewExecutable, 'build', "-Puse${variant}=true"
-    }
+publishing {
+    publications { register('mavenJava', MavenPublication) { from components.java } }
 }
 
-tasks.register('buildAll') {
-    dependsOn 'buildCuda', 'buildDml', 'buildCpu'
-}
-
-String sha256Hex(byte[] fileBytes) {
-    MessageDigest messageDigest = MessageDigest.getInstance('SHA-256')
-    byte[] digestBytes = messageDigest.digest(fileBytes)
-    StringBuilder hexBuilder = new StringBuilder(digestBytes.length * 2)
-    for (byte digestByte : digestBytes) {
-        hexBuilder.append(String.format('%02x', digestByte))
-    }
-    return hexBuilder.toString()
+String sha256Hex(byte[] bytes) {
+    MessageDigest digest = MessageDigest.getInstance('SHA-256')
+    return digest.digest(bytes).collect { String.format('%02x', it) }.join()
 }

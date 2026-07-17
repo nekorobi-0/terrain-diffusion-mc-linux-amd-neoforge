@@ -1,5 +1,7 @@
 package com.github.xandergos.terraindiffusionmc.infinitetensor;
 
+import com.github.xandergos.terraindiffusionmc.config.TerrainDiffusionConfig;
+
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedHashSet;
@@ -195,7 +197,16 @@ public class InfiniteTensor {
         int from = 0;
         while (from < windowIndices.size()) {
             int to = Math.min(from + batchSize, windowIndices.size());
-            List<int[]> batch = windowIndices.subList(from, to);
+            int requestedBatchSize = to - from;
+            List<int[]> batch = new ArrayList<>(windowIndices.subList(from, to));
+            if (!"cpu".equals(TerrainDiffusionConfig.inferenceDevice()) && requestedBatchSize < batchSize) {
+                // MIGraphX caches compiled programs by input shape. Pad only the last GPU batch
+                // to keep a single shape per stage; cached results are written only for real tiles.
+                int[] paddingWindow = batch.get(0);
+                while (batch.size() < batchSize) {
+                    batch.add(paddingWindow);
+                }
+            }
 
             // args.get(depIdx) → list of tensors for that dep, one per window
             List<List<FloatTensor>> args = new ArrayList<>(deps.length);
@@ -215,7 +226,7 @@ public class InfiniteTensor {
             }
 
             List<FloatTensor> outputs = batchFunction.apply(batch, args);
-            for (int k = 0; k < batch.size(); k++) {
+            for (int k = 0; k < requestedBatchSize; k++) {
                 FloatTensor result = outputs.get(k);
                 int[] windowIndex = batch.get(k);
                 validateOutputShape(result, windowIndex);

@@ -1,62 +1,25 @@
 package com.github.xandergos.terraindiffusionmc.world;
 
-import com.mojang.serialization.Codec;
-import com.mojang.serialization.codecs.RecordCodecBuilder;
-import net.minecraft.world.PersistentState;
-import net.minecraft.world.PersistentStateType;
+import net.minecraft.core.HolderLookup;
+import net.minecraft.nbt.CompoundTag;
+import net.minecraft.world.level.saveddata.SavedData;
 
-/**
- * Persisted per-world settings for terrain diffusion.
- *
- * <p>This is stored in the world save via Minecraft's persistent state manager.
- */
-public final class WorldScaleSettingsState extends PersistentState {
-    private static final Codec<WorldScaleSettingsState> CODEC = RecordCodecBuilder.create(instance -> instance.group(
-            Codec.INT.optionalFieldOf("scale", WorldScaleManager.DEFAULT_SCALE).forGetter(WorldScaleSettingsState::getScale),
-            Codec.BOOL.optionalFieldOf("explicit_scale", false).forGetter(WorldScaleSettingsState::hasExplicitScale)
-    ).apply(instance, WorldScaleSettingsState::new));
-
+public final class WorldScaleSettingsState extends SavedData {
     private int scale;
     private boolean explicitScale;
 
-    private WorldScaleSettingsState(int configuredScale, boolean hasExplicitScale) {
-        this.scale = WorldScaleManager.clampScale(configuredScale);
-        this.explicitScale = hasExplicitScale;
+    private WorldScaleSettingsState(int scale, boolean explicitScale) {
+        this.scale = WorldScaleManager.clampScale(scale);
+        this.explicitScale = explicitScale;
     }
 
-    /**
-     * Creates a default state for worlds that do not yet have saved terrain diffusion settings.
-     */
-    public static WorldScaleSettingsState createDefault() {
-        return new WorldScaleSettingsState(WorldScaleManager.DEFAULT_SCALE, false);
+    public static WorldScaleSettingsState createDefault() { return new WorldScaleSettingsState(WorldScaleManager.DEFAULT_SCALE, false); }
+    public static WorldScaleSettingsState load(CompoundTag tag, HolderLookup.Provider provider) {
+        return new WorldScaleSettingsState(tag.getInt("scale"), tag.getBoolean("explicit_scale"));
     }
-
-    /**
-     * Type descriptor used by the persistent state manager.
-     */
-    public static final PersistentStateType<WorldScaleSettingsState> TYPE =
-            new PersistentStateType<>("terrain_diffusion_world_settings", WorldScaleSettingsState::createDefault, CODEC, null);
-
-    /**
-     * Returns the currently persisted world scale.
-     */
-    public int getScale() {
-        return scale;
-    }
-
-    /**
-     * Returns whether this world has an explicitly chosen scale.
-     */
-    public boolean hasExplicitScale() {
-        return explicitScale;
-    }
-
-    /**
-     * Applies a new persisted world scale and marks the state dirty.
-     */
-    public void setScale(int configuredScale) {
-        this.scale = WorldScaleManager.clampScale(configuredScale);
-        this.explicitScale = true;
-        markDirty();
-    }
+    public static final SavedData.Factory<WorldScaleSettingsState> TYPE = new SavedData.Factory<>(WorldScaleSettingsState::createDefault, WorldScaleSettingsState::load);
+    public int getScale() { return scale; }
+    public boolean hasExplicitScale() { return explicitScale; }
+    public void setScale(int scale) { this.scale = WorldScaleManager.clampScale(scale); this.explicitScale = true; setDirty(); }
+    @Override public CompoundTag save(CompoundTag tag, HolderLookup.Provider provider) { tag.putInt("scale", scale); tag.putBoolean("explicit_scale", explicitScale); return tag; }
 }

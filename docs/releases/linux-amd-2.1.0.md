@@ -1,6 +1,6 @@
 # Linux AMD Release Notes
 
-Release target: `terrain-diffusion-mc-2.1.0-linux-amd+1.21.11.jar`
+Release target: `terrain-diffusion-mc-2.1.0-linux-amd+1.21.1.jar`
 
 ## Purpose
 
@@ -27,9 +27,8 @@ This release packages the Linux AMD fork changes needed to run Terrain Diffusion
 - GPU: AMD Radeon RX 7900 XT
 - ROCm: `7.2.x`
 - Java: Microsoft OpenJDK `21.0.7`
-- Minecraft: `1.21.11`
-- Fabric Loader: `0.19.2`
-- Fabric API: `0.141.3+1.21.11`
+- Minecraft: `1.21.1`
+- NeoForge: `21.1.229`
 
 ## Required Config
 

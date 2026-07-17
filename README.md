@@ -29,9 +29,8 @@ It does not replace upstream. If you want the original project and its normal re
 - GPU: AMD Radeon RX 7900 XT (`gfx1100`)
 - ROCm: `7.2.x`
 - Java: Microsoft OpenJDK `21.0.7`
-- Minecraft: `1.21.11`
-- Fabric Loader: `0.19.2`
-- Fabric API: `0.141.3+1.21.11`
+- Minecraft: `1.21.1`
+- NeoForge: `21.1.229`
 
 ## Build Matrix
 
@@ -46,7 +45,7 @@ For AMD on Linux, use the `linux-amd` jar from this fork's releases, not the CPU
 
 ## Requirements
 
-- Minecraft with [Fabric](https://fabricmc.net/) and [Fabric API](https://modrinth.com/mod/fabric-api)
+- Minecraft with [NeoForge](https://neoforged.net/)
 - Java 21
 - For the Linux AMD path:
   - an AMD GPU supported by ROCm/MIGraphX
@@ -119,9 +118,8 @@ Terrain Diffusion worlds expose a `World Scale` setting from `1` to `6`.
 
 Primary runtime/build dependencies involved in this fork:
 
-- Minecraft `1.21.11`
-- Fabric Loader `0.19.2`
-- Fabric API `0.141.3+1.21.11`
+- Minecraft `1.21.1`
+- NeoForge `21.1.229`
 - ONNX Runtime `1.23.2`
 - ROCm/MIGraphX `7.2.x`
 

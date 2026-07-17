@@ -1,5 +1,6 @@
 package com.github.xandergos.terraindiffusionmc.pipeline;
 
+import com.github.xandergos.terraindiffusionmc.config.TerrainDiffusionConfig;
 import com.github.xandergos.terraindiffusionmc.infinitetensor.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -24,9 +25,9 @@ public final class WorldPipeline implements AutoCloseable {
     static final int COARSE_TILE_SIZE   = 64;
     static final int COARSE_TILE_STRIDE = 48;
     static final int LATENT_TILE_SIZE   = 64;
-    static final int LATENT_TILE_STRIDE = 32;
+    static final int LATENT_TILE_STRIDE = TerrainDiffusionConfig.performanceMode() ? 48 : 32;
     static final int DECODER_TILE_SIZE  = 256;
-    static final int DECODER_TILE_STRIDE = 192;
+    static final int DECODER_TILE_STRIDE = TerrainDiffusionConfig.performanceMode() ? 224 : 192;
 
     static final float[] MODEL_MEANS = WorldPipelineModelConfig.coarseMeans();
     static final float[] MODEL_STDS = WorldPipelineModelConfig.coarseStds();
@@ -124,93 +125,115 @@ public final class WorldPipeline implements AutoCloseable {
         int S = COARSE_TILE_SIZE, ST = COARSE_TILE_STRIDE;
         float[] ww = linearWeightWindow(S);
         TensorWindow outWin = new TensorWindow(new int[]{7, S, S}, new int[]{7, ST, ST});
-        return tileStore.getOrCreate("base_coarse_map", new Integer[]{7, null, null},
-                (wi, args) -> coarseTile(wi, ww), outWin,
-                new InfiniteTensor[]{}, new TensorWindow[]{}, cacheLimitBytes);
+        return tileStore.getOrCreateBatched("base_coarse_map", new Integer[]{7, null, null},
+                (wis, args) -> coarseBatch(wis, ww), outWin,
+                new InfiniteTensor[]{}, new TensorWindow[]{}, cacheLimitBytes, 16);
     }
 
-    private FloatTensor coarseTile(int[] wi, float[] ww) {
+    /**
+     * The coarse tiles have no upstream dependency, so they can share every diffusion step in
+     * one model invocation. A 16-tile coarse batch is still small in VRAM but is large enough to
+     * amortize GPU launch and host-copy overhead for this 64x64 model.
+     */
+    private List<FloatTensor> coarseBatch(List<int[]> wis, float[] ww) {
         int S = COARSE_TILE_SIZE, ST = COARSE_TILE_STRIDE;
-        int i = wi[1], j = wi[2];
-        int i1 = i * ST, j1 = j * ST;
-
-        // Synthetic map conditioning: channels [elev_sqrt, temp, tempStd, precip, precipStd]
-        // Python call: synthetic_map_factory(j1, i1, j2, i2)
-        // Coordinates are intentionally swapped
-        float[][][] syn = syntheticMapFactory.sample(j1, i1, j1 + S, i1 + S);
-
-        // Modify temp channel (index 1): where <= 20, scale toward 20
-        for (int r = 0; r < S; r++)
-            for (int c = 0; c < S; c++) {
-                float v = syn[1][r][c];
-                if (v <= 20f) syn[1][r][c] = (v - 20f) * 1.25f + 20f;
-            }
-
-        // Normalize with MODEL_MEANS/STDS indices [0,2,3,4,5]
+        int batch = wis.size();
+        int pixels = S * S;
         int[] meanIdx = {0, 2, 3, 4, 5};
-        float[] condImg = new float[5 * S * S];
-        for (int ch = 0; ch < 5; ch++) {
-            float mean = MODEL_MEANS[meanIdx[ch]], std = MODEL_STDS[meanIdx[ch]];
-            for (int px = 0; px < S * S; px++)
-                condImg[ch * S * S + px] = (syn[ch][px / S][px % S] - mean) / std;
+        float[] samples = new float[batch * 6 * pixels];
+        float[] condMixedBatch = new float[batch * 5 * pixels];
+        EDMScheduler[] schedulers = new EDMScheduler[batch];
+
+        for (int b = 0; b < batch; b++) {
+            int[] wi = wis.get(b);
+            int i1 = wi[1] * ST, j1 = wi[2] * ST;
+            float[][][] syn = syntheticMapFactory.sample(j1, i1, j1 + S, i1 + S);
+            for (int r = 0; r < S; r++) {
+                for (int c = 0; c < S; c++) {
+                    float v = syn[1][r][c];
+                    if (v <= 20f) syn[1][r][c] = (v - 20f) * 1.25f + 20f;
+                }
+            }
+
+            int condOffset = b * 5 * pixels;
+            float[] condNoise = flatten3D(GaussianNoisePatch.generate(seed, i1, j1, S, S, 5, S, S));
+            for (int ch = 0; ch < 5; ch++) {
+                float mean = MODEL_MEANS[meanIdx[ch]], std = MODEL_STDS[meanIdx[ch]];
+                float cosT = (float) Math.cos(Math.atan(COND_SNR[ch]));
+                float sinT = (float) Math.sin(Math.atan(COND_SNR[ch]));
+                for (int px = 0; px < pixels; px++) {
+                    float normalized = (syn[ch][px / S][px % S] - mean) / std;
+                    condMixedBatch[condOffset + ch * pixels + px] = cosT * normalized
+                            + sinT * condNoise[ch * pixels + px];
+                }
+            }
+
+            float[] initialSample = flatten3D(GaussianNoisePatch.generate(seed + 1, i1, j1, S, S, 6, S, S));
+            EDMScheduler scheduler = new EDMScheduler(20);
+            for (int k = 0; k < initialSample.length; k++) {
+                samples[b * 6 * pixels + k] = initialSample[k] * scheduler.sigmas[0];
+            }
+            schedulers[b] = scheduler;
         }
 
-        // Conditioning noise: Gaussian noise (5, S, S)
-        float[] condNoise = flatten3D(GaussianNoisePatch.generate(seed, i1, j1, S, S, 5, S, S));
+        float[][] condInputs = new float[5][batch];
+        long[][] condShapes = new long[5][1];
+        for (int ci = 0; ci < 5; ci++) {
+            for (int b = 0; b < batch; b++) condInputs[ci][b] = COND_VALS[ci];
+            condShapes[ci] = new long[]{batch};
+        }
 
-        // cond_img_mixed = cos(t_cond) * normalized + sin(t_cond) * noise
-        float[] condMixed = new float[5 * S * S];
-        for (int ch = 0; ch < 5; ch++) {
-            float cosT = (float) Math.cos(Math.atan(COND_SNR[ch]));
-            float sinT = (float) Math.sin(Math.atan(COND_SNR[ch]));
-            for (int px = 0; px < S * S; px++) {
-                condMixed[ch * S * S + px] = cosT * condImg[ch * S * S + px]
-                        + sinT * condNoise[ch * S * S + px];
+        LOG.debug("Coarse model called for {} chunks (20 steps)", batch);
+        for (int step = 0; step < 20; step++) {
+            float sigma = schedulers[0].sigmas[step];
+            float cnoise = EDMScheduler.trigflowPreconditionNoise(sigma);
+            float[] xIn = new float[batch * 11 * pixels];
+            for (int b = 0; b < batch; b++) {
+                int sampleOffset = b * 6 * pixels;
+                int inputOffset = b * 11 * pixels;
+                for (int k = 0; k < 6 * pixels; k++) {
+                    xIn[inputOffset + k] = samples[sampleOffset + k]
+                            / (float) Math.sqrt(sigma * sigma + SIGMA_DATA * SIGMA_DATA);
+                }
+                System.arraycopy(condMixedBatch, b * 5 * pixels, xIn, inputOffset + 6 * pixels, 5 * pixels);
+            }
+            float[] modelOut = coarseModel.runModel(
+                    xIn, new long[]{batch, 11, S, S}, fill(batch, cnoise), condInputs, condShapes);
+            for (int b = 0; b < batch; b++) {
+                float[] sample = new float[6 * pixels];
+                float[] output = new float[6 * pixels];
+                System.arraycopy(samples, b * 6 * pixels, sample, 0, sample.length);
+                System.arraycopy(modelOut, b * 6 * pixels, output, 0, output.length);
+                float[] stepped = schedulers[b].step(output, sample);
+                System.arraycopy(stepped, 0, samples, b * 6 * pixels, stepped.length);
             }
         }
 
-        // Initial sample: (6, S, S) noise * sigma_max
-        EDMScheduler sched = new EDMScheduler(20);
-        float[] sample = flatten3D(GaussianNoisePatch.generate(seed + 1, i1, j1, S, S, 6, S, S));
-        for (int k = 0; k < sample.length; k++) sample[k] *= sched.sigmas[0];
-
-        // 20-step DPM-Solver++
-        float[][] condInputs = new float[5][1];
-        long[][] condShapes  = new long[5][1];
-        for (int ci = 0; ci < 5; ci++) { condInputs[ci] = new float[]{COND_VALS[ci]}; condShapes[ci] = new long[]{1}; }
-
-        LOG.debug("Coarse model called for chunk ({}, {}) tile pixels [{}, {}]-[{}, {}] (20 steps)", i, j, i1, j1, i1 + S, j1 + S);
-        for (int step = 0; step < 20; step++) {
-            float sigma  = sched.sigmas[step];
-            float cnoise = EDMScheduler.trigflowPreconditionNoise(sigma);
-            float[] scaledIn = EDMScheduler.preconditionInputs(sample, sigma);
-
-            float[] xIn = new float[11 * S * S];
-            System.arraycopy(scaledIn, 0, xIn, 0, 6 * S * S);
-            System.arraycopy(condMixed, 0, xIn, 6 * S * S, 5 * S * S);
-
-            float[] modelOut = coarseModel.runModel(
-                    xIn, new long[]{1, 11, S, S}, new float[]{cnoise}, condInputs, condShapes);
-            sample = sched.step(modelOut, sample);
+        List<FloatTensor> results = new ArrayList<>(batch);
+        for (int b = 0; b < batch; b++) {
+            FloatTensor result = new FloatTensor(new int[]{7, S, S});
+            int sampleOffset = b * 6 * pixels;
+            for (int ch = 0; ch < 6; ch++) {
+                for (int px = 0; px < pixels; px++) {
+                    float value = (samples[sampleOffset + ch * pixels + px] / SIGMA_DATA)
+                            * MODEL_STDS[ch] + MODEL_MEANS[ch];
+                    if (ch == 1) {
+                        float base = (samples[sampleOffset + px] / SIGMA_DATA) * MODEL_STDS[0] + MODEL_MEANS[0];
+                        value = base - value;
+                    }
+                    result.data[ch * pixels + px] = value * ww[px];
+                }
+            }
+            System.arraycopy(ww, 0, result.data, 6 * pixels, pixels);
+            results.add(result);
         }
+        return results;
+    }
 
-        // Denormalize: sample / sigma_data → raw, then * STDS + MEANS
-        float[] out = new float[6 * S * S];
-        for (int ch = 0; ch < 6; ch++)
-            for (int px = 0; px < S * S; px++)
-                out[ch * S * S + px] = (sample[ch * S * S + px] / SIGMA_DATA) * MODEL_STDS[ch] + MODEL_MEANS[ch];
-
-        // ch1 = ch0 - ch1 (convert to p5)
-        for (int px = 0; px < S * S; px++)
-            out[S * S + px] = out[px] - out[S * S + px];
-
-        // Output: (7, S, S) = [6 channels * weight | weight]
-        FloatTensor result = new FloatTensor(new int[]{7, S, S});
-        for (int ch = 0; ch < 6; ch++)
-            for (int px = 0; px < S * S; px++)
-                result.data[ch * S * S + px] = out[ch * S * S + px] * ww[px];
-        System.arraycopy(ww, 0, result.data, 6 * S * S, S * S);
-        return result;
+    private static float[] fill(int size, float value) {
+        float[] values = new float[size];
+        java.util.Arrays.fill(values, value);
+        return values;
     }
 
     // =========================================================================
@@ -228,14 +251,14 @@ public final class WorldPipeline implements AutoCloseable {
                 "init_latent_map", new Integer[]{6, null, null},
                 (wis, args) -> latentBatch(wis, null, args.get(0), tInit, 5819, ww),
                 outWin, new InfiniteTensor[]{coarse}, new TensorWindow[]{coarseWin},
-                cacheLimitBytes, 4);
+                cacheLimitBytes, 8);
 
         float interT = (float) Math.atan(0.35f / SIGMA_DATA);
         return tileStore.getOrCreateBatched(
                 "step_latent_map_0", new Integer[]{6, null, null},
                 (wis, args) -> latentBatch(wis, args.get(0), args.get(1), interT, 5820, ww),
                 outWin, new InfiniteTensor[]{initLatent, coarse}, new TensorWindow[]{outWin, coarseWin},
-                cacheLimitBytes, 4);
+                cacheLimitBytes, 8);
     }
 
     private List<FloatTensor> latentBatch(List<int[]> wis, List<FloatTensor> prevSamples,

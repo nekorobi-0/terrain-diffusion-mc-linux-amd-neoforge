@@ -8,66 +8,61 @@ import com.github.xandergos.terraindiffusionmc.world.TerrainDiffusionBiomeSource
 import com.github.xandergos.terraindiffusionmc.world.TerrainDiffusionDensityFunction;
 import com.github.xandergos.terraindiffusionmc.world.WorldScaleManager;
 import com.mojang.brigadier.context.CommandContext;
-import net.fabricmc.api.ModInitializer;
-import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
-import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
-import net.fabricmc.fabric.api.event.lifecycle.v1.ServerWorldEvents;
-import net.minecraft.registry.Registries;
-import net.minecraft.registry.Registry;
-import net.minecraft.server.command.ServerCommandSource;
-import net.minecraft.text.ClickEvent;
-import net.minecraft.text.MutableText;
-import net.minecraft.text.Text;
 import java.net.URI;
-import net.minecraft.util.Identifier;
-import net.minecraft.world.World;
+import net.minecraft.commands.CommandSourceStack;
+import net.minecraft.commands.Commands;
+import net.minecraft.core.registries.Registries;
+import net.minecraft.network.chat.ClickEvent;
+import net.minecraft.network.chat.Component;
+import net.minecraft.resources.ResourceLocation;
+import net.minecraft.world.level.Level;
+import net.neoforged.bus.api.IEventBus;
+import net.neoforged.fml.common.Mod;
+import net.neoforged.neoforge.common.NeoForge;
+import net.neoforged.neoforge.event.RegisterCommandsEvent;
+import net.neoforged.neoforge.event.level.LevelEvent;
+import net.neoforged.neoforge.event.server.ServerStartingEvent;
+import net.neoforged.neoforge.event.server.ServerStoppingEvent;
+import net.neoforged.neoforge.registries.RegisterEvent;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import static net.minecraft.server.command.CommandManager.literal;
-
-public class TerrainDiffusionMc implements ModInitializer {
-    public static final String MOD_ID = "terrain-diffusion-mc";
+@Mod(TerrainDiffusionMc.MOD_ID)
+public final class TerrainDiffusionMc {
+    public static final String MOD_ID = "terrain_diffusion_mc";
+    public static final String RESOURCE_NAMESPACE = "terrain-diffusion-mc";
     private static final Logger LOG = LoggerFactory.getLogger(TerrainDiffusionMc.class);
 
-    @Override
-    public void onInitialize() {
+    public TerrainDiffusionMc(IEventBus modBus) {
         LOG.info("Initializing terrain-diffusion-mc");
-        Registry.register(Registries.BIOME_SOURCE, Identifier.of(MOD_ID, "terrain_diffusion"), TerrainDiffusionBiomeSource.CODEC);
-        Registry.register(Registries.DENSITY_FUNCTION_TYPE, Identifier.of(MOD_ID, "terrain_diffusion"), TerrainDiffusionDensityFunction.CODEC);
-
+        modBus.addListener(TerrainDiffusionMc::registerWorldgenCodecs);
         ModelAssetManager.ensureAssetsReady();
         PipelineModels.load();
-
-        ServerLifecycleEvents.SERVER_STARTING.register(server -> LocalTerrainProvider.clearCache());
-
-        ServerWorldEvents.LOAD.register((server, world) -> {
-            if (world.getRegistryKey() == World.OVERWORLD) {
-                WorldScaleManager.initializeForWorld(world);
-                LocalTerrainProvider.init(world.getSeed());
+        NeoForge.EVENT_BUS.addListener((ServerStartingEvent event) -> LocalTerrainProvider.clearCache());
+        NeoForge.EVENT_BUS.addListener((LevelEvent.Load event) -> {
+            if (event.getLevel() instanceof net.minecraft.server.level.ServerLevel level && level.dimension() == Level.OVERWORLD) {
+                WorldScaleManager.initializeForWorld(level);
+                LocalTerrainProvider.init(level.getSeed());
             }
         });
-
-        ServerLifecycleEvents.SERVER_STOPPING.register(server -> ExplorerServer.stop());
-
-        CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) ->
-                dispatcher.register(literal("td-explore").executes(TerrainDiffusionMc::executeExplore))
-        );
+        NeoForge.EVENT_BUS.addListener((ServerStoppingEvent event) -> ExplorerServer.stop());
+        NeoForge.EVENT_BUS.addListener((RegisterCommandsEvent event) -> event.getDispatcher().register(Commands.literal("td-explore").executes(TerrainDiffusionMc::executeExplore)));
     }
 
-    private static int executeExplore(CommandContext<ServerCommandSource> ctx) {
+    private static void registerWorldgenCodecs(RegisterEvent event) {
+        ResourceLocation id = ResourceLocation.fromNamespaceAndPath(RESOURCE_NAMESPACE, "terrain_diffusion");
+        event.register(Registries.BIOME_SOURCE, id, () -> TerrainDiffusionBiomeSource.CODEC);
+        event.register(Registries.DENSITY_FUNCTION_TYPE, id, () -> TerrainDiffusionDensityFunction.CODEC);
+    }
+
+    private static int executeExplore(CommandContext<CommandSourceStack> context) {
         try {
-            int port = ExplorerServer.startIfNotRunning();
-            String url = "http://localhost:" + port;
-            MutableText link = Text.literal(url)
-                    .styled(s -> s.withClickEvent(new ClickEvent.OpenUrl(URI.create(url)))
-                                  .withUnderline(true));
-            ctx.getSource().sendFeedback(
-                    () -> Text.literal("Terrain Explorer: ").append(link),
-                    false);
-        } catch (Exception e) {
-            LOG.error("Failed to start terrain explorer", e);
-            ctx.getSource().sendError(Text.literal("Failed to start terrain explorer: " + e.getMessage()));
+            String url = "http://localhost:" + ExplorerServer.startIfNotRunning();
+            Component link = Component.literal(url).withStyle(style -> style.withClickEvent(new ClickEvent(ClickEvent.Action.OPEN_URL, URI.create(url).toString())).withUnderlined(true));
+            context.getSource().sendSuccess(() -> Component.literal("Terrain Explorer: ").append(link), false);
+        } catch (Exception exception) {
+            LOG.error("Failed to start terrain explorer", exception);
+            context.getSource().sendFailure(Component.literal("Failed to start terrain explorer: " + exception.getMessage()));
         }
         return 1;
     }

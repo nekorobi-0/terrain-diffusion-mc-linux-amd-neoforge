@@ -1,10 +1,6 @@
 package com.github.xandergos.terraindiffusionmc.client;
 
-import net.fabricmc.api.ClientModInitializer;
-
-public class TerrainDiffusionMcClient implements ClientModInitializer {
-
-    @Override
-    public void onInitializeClient() {
-    }
+/** Client hooks are registered through NeoForge's event bus when needed. */
+public final class TerrainDiffusionMcClient {
+    private TerrainDiffusionMcClient() {}
 }
