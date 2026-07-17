@@ -20,6 +20,7 @@ public final class TerrainDiffusionConfig {
     private static final int DEFAULT_ONNX_INTER_OP_THREADS = 1;
     private static final boolean DEFAULT_MIGRAPHX_FP16 = true;
     private static final boolean DEFAULT_PERFORMANCE_MODE = false;
+    private static final int DEFAULT_PREFETCH_TILES = 4;
     private static final boolean DEFAULT_VALIDATE_MODEL = true;
     private static final int DEFAULT_EXPLORER_PORT = 19801;
     private static final int DEFAULT_TILE_SIZE = 256;
@@ -102,6 +103,12 @@ public final class TerrainDiffusionConfig {
     /** Reduce tile overlap to lower repeated model inference at the cost of less seam blending. */
     public static boolean performanceMode() {
         return readBoolean("generation.performance_mode", DEFAULT_PERFORMANCE_MODE);
+    }
+
+    /** Number of terrain tiles generated together when a new tile is requested. */
+    public static int prefetchTiles() {
+        int configuredTiles = readPositiveInt("generation.prefetch_tiles", DEFAULT_PREFETCH_TILES);
+        return Math.min(4, configuredTiles);
     }
 
     /** TCP port for the local terrain explorer HTTP server. */

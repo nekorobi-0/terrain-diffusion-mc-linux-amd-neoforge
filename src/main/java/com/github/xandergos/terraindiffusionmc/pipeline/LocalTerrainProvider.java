@@ -1,5 +1,6 @@
 package com.github.xandergos.terraindiffusionmc.pipeline;
 
+import com.github.xandergos.terraindiffusionmc.config.TerrainDiffusionConfig;
 import com.github.xandergos.terraindiffusionmc.infinitetensor.FloatTensor;
 import com.github.xandergos.terraindiffusionmc.world.WorldScaleManager;
 import org.slf4j.Logger;
@@ -179,20 +180,51 @@ public final class LocalTerrainProvider {
 
         int scale = WorldScaleManager.getCurrentScale();
         FutureTask<HeightmapData> task = new FutureTask<>(() -> {
+            synchronized (CACHE_LOCK) {
+                HeightmapData cached = CACHE.get(key);
+                if (cached != null) {
+                    PENDING.remove(key);
+                    return cached;
+                }
+            }
+
             long generationStartNanos = System.nanoTime();
             long computedWindowCountBefore = pipeline.getTotalComputedWindowCount();
-            HeightmapData data = scale <= 1
-                    ? handle1x(i1, j1, i2, j2)
-                    : handleUpsampled(i1, j1, i2, j2, scale);
+            int requestedWidth = j2 - j1;
+            int requestedHeight = i2 - i1;
+            int tileSize = TerrainDiffusionConfig.tileSize();
+            int prefetchTiles = TerrainDiffusionConfig.prefetchTiles();
+            boolean prefetch = prefetchTiles > 1 && requestedWidth == tileSize && requestedHeight == tileSize;
+
+            HeightmapData data;
+            int generatedWidth = requestedWidth;
+            int generatedHeight = requestedHeight;
+            if (prefetch) {
+                int batchSize = tileSize * prefetchTiles;
+                int batchI1 = Math.floorDiv(i1, batchSize) * batchSize;
+                int batchJ1 = Math.floorDiv(j1, batchSize) * batchSize;
+                int batchI2 = batchI1 + batchSize;
+                int batchJ2 = batchJ1 + batchSize;
+                HeightmapData batchData = scale <= 1
+                        ? handle1x(batchI1, batchJ1, batchI2, batchJ2)
+                        : handleUpsampled(batchI1, batchJ1, batchI2, batchJ2, scale);
+                cachePrefetchedTiles(batchData, batchI1, batchJ1, tileSize, prefetchTiles);
+                data = sliceHeightmapData(batchData, i1 - batchI1, j1 - batchJ1, tileSize, tileSize);
+                generatedWidth = batchSize;
+                generatedHeight = batchSize;
+            } else {
+                data = scale <= 1
+                        ? handle1x(i1, j1, i2, j2)
+                        : handleUpsampled(i1, j1, i2, j2, scale);
+            }
             long computedWindowCountAfter = pipeline.getTotalComputedWindowCount();
             long generationElapsedMillis = (System.nanoTime() - generationStartNanos) / 1_000_000L;
 
             long newlyComputedWindowCount = computedWindowCountAfter - computedWindowCountBefore;
-            int regionWidth = j2 - j1;
-            int regionHeight = i2 - i1;
             LOG.info(
-                    "Terrain Diffusion ({}) finished generating region {}x{} in {} ms ({} newly computed windows)",
-                    OnnxModel.getResolvedInferenceProvider(), regionWidth, regionHeight,
+                    "Terrain Diffusion ({}) finished request {}x{} using batch {}x{} in {} ms ({} newly computed windows)",
+                    OnnxModel.getResolvedInferenceProvider(), requestedWidth, requestedHeight,
+                    generatedWidth, generatedHeight,
                     generationElapsedMillis, newlyComputedWindowCount);
             synchronized (CACHE_LOCK) {
                 CACHE.put(key, data);
@@ -225,6 +257,33 @@ public final class LocalTerrainProvider {
             it.next();
             it.remove();
         }
+    }
+
+    private static void cachePrefetchedTiles(HeightmapData batch, int batchI1, int batchJ1,
+                                             int tileSize, int tilesPerSide) {
+        synchronized (CACHE_LOCK) {
+            for (int tileRow = 0; tileRow < tilesPerSide; tileRow++) {
+                for (int tileColumn = 0; tileColumn < tilesPerSide; tileColumn++) {
+                    int tileI1 = batchI1 + tileRow * tileSize;
+                    int tileJ1 = batchJ1 + tileColumn * tileSize;
+                    String tileKey = tileI1 + "," + tileJ1 + "," + (tileI1 + tileSize) + "," + (tileJ1 + tileSize);
+                    CACHE.put(tileKey, sliceHeightmapData(
+                            batch, tileRow * tileSize, tileColumn * tileSize, tileSize, tileSize));
+                }
+            }
+            evictLruTo(MAX_CACHE_SIZE);
+        }
+    }
+
+    private static HeightmapData sliceHeightmapData(HeightmapData source, int rowOffset, int columnOffset,
+                                                     int height, int width) {
+        short[][] heightmap = new short[height][width];
+        short[][] biomeIds = new short[height][width];
+        for (int row = 0; row < height; row++) {
+            System.arraycopy(source.heightmap[rowOffset + row], columnOffset, heightmap[row], 0, width);
+            System.arraycopy(source.biomeIds[rowOffset + row], columnOffset, biomeIds[row], 0, width);
+        }
+        return new HeightmapData(heightmap, biomeIds, width, height);
     }
 
     // =========================================================================
