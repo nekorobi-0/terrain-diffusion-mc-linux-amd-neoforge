@@ -277,12 +277,15 @@ public final class LocalTerrainProvider {
         float[] elevSmooth = cropFlat(elevUp, cropI1,     cropJ1,     H,   W,   nH * scale, nW * scale);
         float[] elevPadded = cropFlat(elevUp, cropI1 - 1, cropJ1 - 1, H+2, W+2, nH * scale, nW * scale);
 
-        // Upsample climate (4, nH, nW) → (4, H, W)
-        float[] climate = upsampleClimate(climateNativeFlat, nH, nW, cropI1, cropJ1, H, W, scale, nH * scale, nW * scale);
-
         float[] elevOut = addElevationNoise(elevSmooth, elevPadded, i1, j1, H, W, pixelSizeM);
 
-        short[] biomeFlat = BiomeClassifier.classify(elevSmooth, climate, i1, j1, elevPadded, H, W, pixelSizeM);
+        // Classify at model resolution. Classifying a bilinearly interpolated climate
+        // field at every Minecraft block turns threshold boundaries into tiny patches.
+        float[] nativeElevPadded = pipeline.get(i1p - 1, j1p - 1, i2p + 1, j2p + 1, false)[0];
+        short[] nativeBiomeFlat = BiomeClassifier.classify(
+                elevNativeFlat, climateNativeFlat, i1p, j1p,
+                nativeElevPadded, nH, nW, NATIVE_RESOLUTION);
+        short[] biomeFlat = upsampleBiomeNearest(nativeBiomeFlat, nH, nW, cropI1, cropJ1, H, W, scale);
         return buildHeightmapData(elevOut, biomeFlat, H, W);
     }
 
@@ -336,19 +339,15 @@ public final class LocalTerrainProvider {
         return result;
     }
 
-    private static float[] upsampleClimate(float[] climNative, int nH, int nW,
-                                            int cropI1, int cropJ1, int H, int W,
-                                            int scale, int upH, int upW) {
-        if (climNative == null) return null;
-        float[] result = new float[4 * H * W];
-        for (int ch = 0; ch < 4; ch++) {
-            float[][] chNative = new float[nH][nW];
-            for (int r = 0; r < nH; r++)
-                System.arraycopy(climNative, ch * nH * nW + r * nW, chNative[r], 0, nW);
-            float[][] chUp = LaplacianUtils.bilinearResize(chNative, upH, upW);
-            for (int r = 0; r < H; r++)
-                for (int c = 0; c < W; c++)
-                    result[ch * H * W + r * W + c] = chUp[cropI1 + r][cropJ1 + c];
+    private static short[] upsampleBiomeNearest(short[] nativeBiome, int nH, int nW,
+                                                 int cropI1, int cropJ1, int H, int W, int scale) {
+        short[] result = new short[H * W];
+        for (int r = 0; r < H; r++) {
+            int sourceRow = Math.max(0, Math.min(nH - 1, (cropI1 + r) / scale));
+            for (int c = 0; c < W; c++) {
+                int sourceColumn = Math.max(0, Math.min(nW - 1, (cropJ1 + c) / scale));
+                result[r * W + c] = nativeBiome[sourceRow * nW + sourceColumn];
+            }
         }
         return result;
     }
