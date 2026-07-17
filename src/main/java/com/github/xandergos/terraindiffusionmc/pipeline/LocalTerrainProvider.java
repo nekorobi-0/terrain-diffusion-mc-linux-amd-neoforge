@@ -12,10 +12,12 @@ import java.util.Map;
 import java.util.Random;
 import java.util.concurrent.Callable;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.FutureTask;
+import java.util.concurrent.PriorityBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Provides terrain heightmap and biome data from the local WorldPipeline.
@@ -62,11 +64,13 @@ public final class LocalTerrainProvider {
     private static final Map<String, HeightmapData> CACHE = new LinkedHashMap<>(16, 0.75f, true);
     private static final Map<String, Future<HeightmapData>> PENDING = new ConcurrentHashMap<>();
     /** Single thread for pipeline.get() so MemoryTileStore is not accessed concurrently. */
-    private static final ExecutorService INFERENCE_EXECUTOR = Executors.newSingleThreadExecutor(r -> {
+    private static final ThreadPoolExecutor INFERENCE_EXECUTOR = new ThreadPoolExecutor(
+            1, 1, 0L, TimeUnit.MILLISECONDS, new PriorityBlockingQueue<>(), r -> {
         Thread t = new Thread(r, "terrain-diffusion-inference");
         t.setDaemon(true);
         return t;
     });
+    private static final AtomicLong INFERENCE_TASK_SEQUENCE = new AtomicLong();
 
     private static volatile LocalTerrainProvider INSTANCE;
     private static long instanceSeed;
@@ -162,7 +166,9 @@ public final class LocalTerrainProvider {
     }
 
     private static <T> T submitToInferenceThread(Callable<T> task) throws Exception {
-        return INFERENCE_EXECUTOR.submit(task).get();
+        FutureTask<T> future = new FutureTask<>(task);
+        submitInferenceTask(future, 0);
+        return future.get();
     }
 
     /**
@@ -196,41 +202,25 @@ public final class LocalTerrainProvider {
             int prefetchTiles = TerrainDiffusionConfig.prefetchTiles();
             boolean prefetch = prefetchTiles > 1 && requestedWidth == tileSize && requestedHeight == tileSize;
 
-            HeightmapData data;
-            int generatedWidth = requestedWidth;
-            int generatedHeight = requestedHeight;
-            if (prefetch) {
-                int batchSize = tileSize * prefetchTiles;
-                int batchI1 = Math.floorDiv(i1, batchSize) * batchSize;
-                int batchJ1 = Math.floorDiv(j1, batchSize) * batchSize;
-                int batchI2 = batchI1 + batchSize;
-                int batchJ2 = batchJ1 + batchSize;
-                HeightmapData batchData = scale <= 1
-                        ? handle1x(batchI1, batchJ1, batchI2, batchJ2)
-                        : handleUpsampled(batchI1, batchJ1, batchI2, batchJ2, scale);
-                cachePrefetchedTiles(batchData, batchI1, batchJ1, tileSize, prefetchTiles);
-                data = sliceHeightmapData(batchData, i1 - batchI1, j1 - batchJ1, tileSize, tileSize);
-                generatedWidth = batchSize;
-                generatedHeight = batchSize;
-            } else {
-                data = scale <= 1
-                        ? handle1x(i1, j1, i2, j2)
-                        : handleUpsampled(i1, j1, i2, j2, scale);
-            }
+            HeightmapData data = scale <= 1
+                    ? handle1x(i1, j1, i2, j2)
+                    : handleUpsampled(i1, j1, i2, j2, scale);
             long computedWindowCountAfter = pipeline.getTotalComputedWindowCount();
             long generationElapsedMillis = (System.nanoTime() - generationStartNanos) / 1_000_000L;
 
             long newlyComputedWindowCount = computedWindowCountAfter - computedWindowCountBefore;
             LOG.info(
-                    "Terrain Diffusion ({}) finished request {}x{} using batch {}x{} in {} ms ({} newly computed windows)",
+                    "Terrain Diffusion ({}) finished request {}x{} in {} ms ({} newly computed windows)",
                     OnnxModel.getResolvedInferenceProvider(), requestedWidth, requestedHeight,
-                    generatedWidth, generatedHeight,
                     generationElapsedMillis, newlyComputedWindowCount);
             synchronized (CACHE_LOCK) {
                 CACHE.put(key, data);
                 evictLruTo(MAX_CACHE_SIZE);
             }
             PENDING.remove(key);
+            if (prefetch) {
+                schedulePrefetch(i1, j1, tileSize, prefetchTiles, scale);
+            }
             return data;
         });
         Future<HeightmapData> existing = PENDING.putIfAbsent(key, task);
@@ -241,7 +231,7 @@ public final class LocalTerrainProvider {
             LOG.info(
                     "Terrain Diffusion ({}) uncached region requested: ({}, {})-({}, {}) size {}x{}",
                     OnnxModel.getResolvedInferenceProvider(), j1, i1, j2, i2, regionWidth, regionHeight);
-            INFERENCE_EXECUTOR.submit(toRun);
+            submitInferenceTask(toRun, 0);
         }
         try {
             return toRun.get();
@@ -259,31 +249,54 @@ public final class LocalTerrainProvider {
         }
     }
 
-    private static void cachePrefetchedTiles(HeightmapData batch, int batchI1, int batchJ1,
-                                             int tileSize, int tilesPerSide) {
-        synchronized (CACHE_LOCK) {
-            for (int tileRow = 0; tileRow < tilesPerSide; tileRow++) {
-                for (int tileColumn = 0; tileColumn < tilesPerSide; tileColumn++) {
-                    int tileI1 = batchI1 + tileRow * tileSize;
-                    int tileJ1 = batchJ1 + tileColumn * tileSize;
-                    String tileKey = tileI1 + "," + tileJ1 + "," + (tileI1 + tileSize) + "," + (tileJ1 + tileSize);
-                    CACHE.put(tileKey, sliceHeightmapData(
-                            batch, tileRow * tileSize, tileColumn * tileSize, tileSize, tileSize));
-                }
+    private void schedulePrefetch(int requestedI1, int requestedJ1, int tileSize, int tilesPerSide, int scale) {
+        int batchSize = tileSize * tilesPerSide;
+        int batchI1 = Math.floorDiv(requestedI1, batchSize) * batchSize;
+        int batchJ1 = Math.floorDiv(requestedJ1, batchSize) * batchSize;
+        for (int tileRow = 0; tileRow < tilesPerSide; tileRow++) {
+            for (int tileColumn = 0; tileColumn < tilesPerSide; tileColumn++) {
+                int tileI1 = batchI1 + tileRow * tileSize;
+                int tileJ1 = batchJ1 + tileColumn * tileSize;
+                if (tileI1 == requestedI1 && tileJ1 == requestedJ1) continue;
+                submitInferenceTask(() -> prefetchTile(tileI1, tileJ1, tileSize, scale), 1);
             }
-            evictLruTo(MAX_CACHE_SIZE);
         }
     }
 
-    private static HeightmapData sliceHeightmapData(HeightmapData source, int rowOffset, int columnOffset,
-                                                     int height, int width) {
-        short[][] heightmap = new short[height][width];
-        short[][] biomeIds = new short[height][width];
-        for (int row = 0; row < height; row++) {
-            System.arraycopy(source.heightmap[rowOffset + row], columnOffset, heightmap[row], 0, width);
-            System.arraycopy(source.biomeIds[rowOffset + row], columnOffset, biomeIds[row], 0, width);
+    private void prefetchTile(int i1, int j1, int tileSize, int scale) {
+        String key = i1 + "," + j1 + "," + (i1 + tileSize) + "," + (j1 + tileSize);
+        synchronized (CACHE_LOCK) {
+            if (CACHE.containsKey(key)) return;
         }
-        return new HeightmapData(heightmap, biomeIds, width, height);
+        if (PENDING.containsKey(key)) return;
+
+        HeightmapData data = scale <= 1
+                ? handle1x(i1, j1, i1 + tileSize, j1 + tileSize)
+                : handleUpsampled(i1, j1, i1 + tileSize, j1 + tileSize, scale);
+        synchronized (CACHE_LOCK) {
+            if (!CACHE.containsKey(key)) {
+                CACHE.put(key, data);
+                evictLruTo(MAX_CACHE_SIZE);
+            }
+        }
+    }
+
+    private static void submitInferenceTask(Runnable task, int priority) {
+        INFERENCE_EXECUTOR.execute(new PrioritizedInferenceTask(task, priority, INFERENCE_TASK_SEQUENCE.getAndIncrement()));
+    }
+
+    private record PrioritizedInferenceTask(Runnable task, int priority, long sequence)
+            implements Runnable, Comparable<PrioritizedInferenceTask> {
+        @Override
+        public void run() {
+            task.run();
+        }
+
+        @Override
+        public int compareTo(PrioritizedInferenceTask other) {
+            int priorityComparison = Integer.compare(priority, other.priority);
+            return priorityComparison != 0 ? priorityComparison : Long.compare(sequence, other.sequence);
+        }
     }
 
     // =========================================================================

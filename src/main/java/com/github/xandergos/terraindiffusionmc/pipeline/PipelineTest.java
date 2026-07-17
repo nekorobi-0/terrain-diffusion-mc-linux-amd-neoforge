@@ -148,6 +148,19 @@ public class PipelineTest {
         monitor.interrupt();
         monitor.join(2000);
 
+        if (Boolean.getBoolean("terrain_diffusion.benchmark_prefetch")) {
+            LocalTerrainProvider.init(seed);
+            LocalTerrainProvider provider = LocalTerrainProvider.getInstance();
+            long primaryStart = System.nanoTime();
+            provider.fetchHeightmap(blockStartZ, blockStartX, blockEndZ, blockEndX);
+            long primaryElapsedNanos = System.nanoTime() - primaryStart;
+            long adjacentStart = System.nanoTime();
+            provider.fetchHeightmap(blockStartZ, blockEndX, blockEndZ, blockEndX + tileSize);
+            long adjacentElapsedNanos = System.nanoTime() - adjacentStart;
+            System.out.printf("Provider primary request: %.3f s%n", primaryElapsedNanos / 1_000_000_000.0);
+            System.out.printf("Provider immediate adjacent request: %.3f s%n", adjacentElapsedNanos / 1_000_000_000.0);
+        }
+
         long peakProc  = peakProcessMB.get();
         long peakTotal = peakTotalMB.get();
         long delta     = baselineTotal >= 0 ? peakTotal - baselineTotal : -1;
