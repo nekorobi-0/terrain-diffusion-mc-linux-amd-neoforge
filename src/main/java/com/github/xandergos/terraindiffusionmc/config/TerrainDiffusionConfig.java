@@ -24,6 +24,7 @@ public final class TerrainDiffusionConfig {
     private static final boolean DEFAULT_VALIDATE_MODEL = true;
     private static final int DEFAULT_EXPLORER_PORT = 19801;
     private static final int DEFAULT_TILE_SIZE = 256;
+    private static final int TILE_SIZE;
 
     static {
         loadDefaults();
@@ -31,6 +32,7 @@ public final class TerrainDiffusionConfig {
         if (configPath != null) {
             loadOverrides(configPath);
         }
+        TILE_SIZE = readTileSize();
     }
 
     private TerrainDiffusionConfig() {
@@ -123,6 +125,10 @@ public final class TerrainDiffusionConfig {
 
     /** Region side length in blocks. Must be a positive power of 2 (128, 256, 512, ...). */
     public static int tileSize() {
+        return TILE_SIZE;
+    }
+
+    private static int readTileSize() {
         int configuredTileSize = readInt("tile_size", DEFAULT_TILE_SIZE);
         if (configuredTileSize <= 0 || !isPowerOfTwo(configuredTileSize)) {
             System.err.println("Invalid tile_size: " + configuredTileSize + ", using default " + DEFAULT_TILE_SIZE);
