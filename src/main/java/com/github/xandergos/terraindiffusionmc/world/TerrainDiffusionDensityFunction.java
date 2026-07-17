@@ -48,6 +48,7 @@ public final class TerrainDiffusionDensityFunction implements DensityFunction.Si
         int startZ = hasTile ? cached.startZ : 0;
         LocalTerrainProvider.HeightmapData data = hasTile ? cached.data : null;
         LocalTerrainProvider provider = LocalTerrainProvider.getInstance();
+        int[] heightLookup = HeightConverter.minecraftHeightLookup();
 
         for (int index = 0; index < values.length; index++) {
             FunctionContext context = contextProvider.forIndex(index);
@@ -69,9 +70,15 @@ public final class TerrainDiffusionDensityFunction implements DensityFunction.Si
                 continue;
             }
 
-            int localX = Math.max(0, Math.min(data.width - 1, x - startX));
-            int localZ = Math.max(0, Math.min(data.height - 1, z - startZ));
-            values[index] = HeightConverter.convertToMinecraftHeight(data.heightmap[localZ][localX]) - y;
+            int localX = x - startX;
+            int localZ = z - startZ;
+            if (localX >= 0 && localX < data.width && localZ >= 0 && localZ < data.height) {
+                values[index] = heightLookup[data.heightmap[localZ][localX] - Short.MIN_VALUE] - y;
+            } else {
+                localX = Math.max(0, Math.min(data.width - 1, localX));
+                localZ = Math.max(0, Math.min(data.height - 1, localZ));
+                values[index] = heightLookup[data.heightmap[localZ][localX] - Short.MIN_VALUE] - y;
+            }
         }
 
         TILE_CACHE.set(new TileCache(cacheEpoch, startX, startZ, data));

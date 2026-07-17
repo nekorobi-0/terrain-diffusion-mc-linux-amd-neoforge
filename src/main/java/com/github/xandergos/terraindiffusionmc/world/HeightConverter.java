@@ -12,12 +12,20 @@ public class HeightConverter {
     }
 
     public static int convertToMinecraftHeight(short meters) {
+        return minecraftHeightLookup()[meters - Short.MIN_VALUE];
+    }
+
+    /**
+     * Returns the conversion table for the active scale so callers sampling a
+     * whole density array do not repeat scale and cache checks per block.
+     */
+    static int[] minecraftHeightLookup() {
         int scale = WorldScaleManager.getCurrentScale();
         HeightLookup lookup = heightLookup;
         if (lookup == null || lookup.scale != scale) {
             lookup = getOrBuildLookup(scale);
         }
-        return lookup.minecraftHeights[meters - Short.MIN_VALUE];
+        return lookup.minecraftHeights;
     }
 
     public static int convertToMinecraftHeight(short meters, int configuredScale) {
