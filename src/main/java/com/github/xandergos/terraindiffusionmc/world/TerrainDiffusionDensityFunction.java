@@ -35,6 +35,48 @@ public final class TerrainDiffusionDensityFunction implements DensityFunction.Si
         return HeightConverter.convertToMinecraftHeight(data.heightmap[localZ][localX]) - y;
     }
 
+    @Override
+    public void fillArray(double[] values, ContextProvider contextProvider) {
+        if (values.length == 0) return;
+
+        int tileSize = TerrainDiffusionConfig.tileSize();
+        int tileShift = Integer.numberOfTrailingZeros(tileSize);
+        long cacheEpoch = LocalTerrainProvider.cacheEpoch();
+        TileCache cached = TILE_CACHE.get();
+        boolean hasTile = cached != null && cached.epoch == cacheEpoch;
+        int startX = hasTile ? cached.startX : 0;
+        int startZ = hasTile ? cached.startZ : 0;
+        LocalTerrainProvider.HeightmapData data = hasTile ? cached.data : null;
+        LocalTerrainProvider provider = LocalTerrainProvider.getInstance();
+
+        for (int index = 0; index < values.length; index++) {
+            FunctionContext context = contextProvider.forIndex(index);
+            int x = context.blockX();
+            int z = context.blockZ();
+            int y = context.blockY();
+            int requestedStartX = (x >> tileShift) << tileShift;
+            int requestedStartZ = (z >> tileShift) << tileShift;
+
+            if (!hasTile || startX != requestedStartX || startZ != requestedStartZ) {
+                startX = requestedStartX;
+                startZ = requestedStartZ;
+                data = provider.fetchHeightmap(startZ, startX, startZ + tileSize, startX + tileSize);
+                hasTile = true;
+            }
+
+            if (data == null || data.heightmap == null) {
+                values[index] = -y;
+                continue;
+            }
+
+            int localX = Math.max(0, Math.min(data.width - 1, x - startX));
+            int localZ = Math.max(0, Math.min(data.height - 1, z - startZ));
+            values[index] = HeightConverter.convertToMinecraftHeight(data.heightmap[localZ][localX]) - y;
+        }
+
+        TILE_CACHE.set(new TileCache(cacheEpoch, startX, startZ, data));
+    }
+
     @Override public double minValue() { return -64; }
     @Override public double maxValue() { return 1024; }
     @Override public KeyDispatchDataCodec<? extends DensityFunction> codec() { return CODEC_HOLDER; }
