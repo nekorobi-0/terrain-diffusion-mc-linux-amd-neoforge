@@ -47,8 +47,12 @@ public class PipelineTest {
         long seed = -5408366058459925370L;
         int scale = 2;
         int tileSize = Integer.getInteger("terrain_diffusion.benchmark_tile_size", 256);
+        int benchmarkRegions = Integer.getInteger("terrain_diffusion.benchmark_regions", 1);
         if (tileSize <= 0 || (tileSize & (tileSize - 1)) != 0) {
             throw new IllegalArgumentException("terrain_diffusion.benchmark_tile_size must be a positive power of two");
+        }
+        if (benchmarkRegions <= 0) {
+            throw new IllegalArgumentException("terrain_diffusion.benchmark_regions must be positive");
         }
 
         int blockX = -16160, blockZ = -59510;
@@ -100,6 +104,15 @@ public class PipelineTest {
             pipeline.get(i1p, j1p, i2p, j2p, false);
             long cachedElapsedNanos = System.nanoTime() - cachedStart;
             System.out.printf("Cached pipeline retrieval: %.3f s%n", cachedElapsedNanos / 1_000_000_000.0);
+
+            for (int region = 1; region < benchmarkRegions; region++) {
+                int shift = region * (tileSize / scale);
+                long regionStart = System.nanoTime();
+                pipeline.get(i1p, j1p + shift, i2p, j2p + shift, false);
+                long regionElapsedNanos = System.nanoTime() - regionStart;
+                System.out.printf("Adjacent uncached region %d: %.3f s%n",
+                        region + 1, regionElapsedNanos / 1_000_000_000.0);
+            }
 
             float[][] native2D = new float[nH][nW];
             for (int r = 0; r < nH; r++)
