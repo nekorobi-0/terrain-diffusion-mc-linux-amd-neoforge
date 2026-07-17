@@ -24,13 +24,20 @@ It does not replace upstream. If you want the original project and its normal re
 
 ## Verified Setup
 
-- OS: CachyOS Linux
-- Kernel: `7.0.1-1-cachyos`
-- GPU: AMD Radeon RX 7900 XT (`gfx1100`)
-- ROCm: `7.2.x`
-- Java: Microsoft OpenJDK `21.0.7`
+- OS: Kubuntu `26.04 LTS`
+- Kernel: Linux `7.0.0-27-generic`
+- CPU: AMD Ryzen 7 9700X (8 cores / 16 threads)
+- GPU: AMD Radeon RX 7900 XTX (`gfx1100`)
+- System memory: 64 GB
+- ROCm: `7.2.0`
+- Java: OpenJDK `21.0.11`
 - Minecraft: `1.21.1`
-- NeoForge: `21.1.229`
+- NeoForge: `21.1.238`
+- ONNX Runtime: custom `1.23.2` build with MIGraphX Execution Provider
+
+The Minecraft runtime log confirms `Terrain Diffusion (MIGraphX)` during 256x256
+region generation. The project build targets NeoForge `21.1.229`; the tested
+NeoForge `21.1.238` runtime is compatible with that target.
 
 ## Build Matrix
 

@@ -21,14 +21,16 @@ This release packages the Linux AMD fork changes needed to run Terrain Diffusion
 
 ## Verified Setup
 
-- OS: CachyOS Linux
-- Kernel: `7.0.1-1-cachyos`
-- CPU: AMD Ryzen 7 9800X3D
-- GPU: AMD Radeon RX 7900 XT
-- ROCm: `7.2.x`
-- Java: Microsoft OpenJDK `21.0.7`
+- OS: Kubuntu `26.04 LTS`
+- Kernel: Linux `7.0.0-27-generic`
+- CPU: AMD Ryzen 7 9700X
+- GPU: AMD Radeon RX 7900 XTX (`gfx1100`)
+- System memory: 64 GB
+- ROCm: `7.2.0`
+- Java: OpenJDK `21.0.11`
 - Minecraft: `1.21.1`
-- NeoForge: `21.1.229`
+- NeoForge: `21.1.238`
+- ONNX Runtime: custom `1.23.2` build with MIGraphX Execution Provider
 
 ## Required Config
 
