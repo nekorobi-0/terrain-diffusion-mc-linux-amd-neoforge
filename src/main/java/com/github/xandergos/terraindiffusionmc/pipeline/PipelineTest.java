@@ -48,11 +48,15 @@ public class PipelineTest {
         int scale = 2;
         int tileSize = Integer.getInteger("terrain_diffusion.benchmark_tile_size", 256);
         int benchmarkRegions = Integer.getInteger("terrain_diffusion.benchmark_regions", 1);
+        int benchmarkStrideTiles = Integer.getInteger("terrain_diffusion.benchmark_stride_tiles", 1);
         if (tileSize <= 0 || (tileSize & (tileSize - 1)) != 0) {
             throw new IllegalArgumentException("terrain_diffusion.benchmark_tile_size must be a positive power of two");
         }
         if (benchmarkRegions <= 0) {
             throw new IllegalArgumentException("terrain_diffusion.benchmark_regions must be positive");
+        }
+        if (benchmarkStrideTiles <= 0) {
+            throw new IllegalArgumentException("terrain_diffusion.benchmark_stride_tiles must be positive");
         }
 
         int blockX = -16160, blockZ = -59510;
@@ -106,7 +110,7 @@ public class PipelineTest {
             System.out.printf("Cached pipeline retrieval: %.3f s%n", cachedElapsedNanos / 1_000_000_000.0);
 
             for (int region = 1; region < benchmarkRegions; region++) {
-                int shift = region * (tileSize / scale);
+                int shift = region * benchmarkStrideTiles * (tileSize / scale);
                 long regionStart = System.nanoTime();
                 pipeline.get(i1p, j1p + shift, i2p, j2p + shift, false);
                 long regionElapsedNanos = System.nanoTime() - regionStart;

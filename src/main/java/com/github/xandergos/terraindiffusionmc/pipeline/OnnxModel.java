@@ -7,6 +7,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.nio.FloatBuffer;
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
@@ -164,6 +165,7 @@ public final class OnnxModel implements AutoCloseable {
         if ("cpu".equals(TerrainDiffusionConfig.inferenceDevice())) {
             OrtSession.SessionOptions sessionOptions = new OrtSession.SessionOptions();
             configureSessionThreading(sessionOptions);
+            configureSessionProfiling(sessionOptions);
             sessionOptions.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.ALL_OPT);
             this.cpuSession = env.createSession(modelBytes, sessionOptions);
             this.gpuSession = null;
@@ -175,6 +177,7 @@ public final class OnnxModel implements AutoCloseable {
         if (!TerrainDiffusionConfig.offloadModels()) {
             OrtSession.SessionOptions sessionOptions = new OrtSession.SessionOptions();
             configureSessionThreading(sessionOptions);
+            configureSessionProfiling(sessionOptions);
             sessionOptions.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.EXTENDED_OPT);
             addGpuProvider(sessionOptions);
             this.gpuSession = env.createSession(modelBytes, sessionOptions);
@@ -337,6 +340,7 @@ public final class OnnxModel implements AutoCloseable {
         try {
             OrtSession.SessionOptions opts = new OrtSession.SessionOptions();
             configureSessionThreading(opts);
+            configureSessionProfiling(opts);
             opts.setOptimizationLevel(OrtSession.SessionOptions.OptLevel.EXTENDED_OPT);
             addGpuProvider(opts);
             activeGpuSession = env.createSession(optimizedModelBytes, opts);
@@ -380,6 +384,22 @@ public final class OnnxModel implements AutoCloseable {
         opts.setInterOpNumThreads(TerrainDiffusionConfig.onnxInterOpThreads());
         opts.addConfigEntry("session.intra_op.allow_spinning", "0");
         opts.addConfigEntry("session.inter_op.allow_spinning", "0");
+    }
+
+    private void configureSessionProfiling(OrtSession.SessionOptions opts) {
+        String profileDir = System.getProperty("terrain_diffusion.ort_profile_dir");
+        if (profileDir == null || profileDir.isBlank()) {
+            return;
+        }
+        try {
+            Path output = Path.of(profileDir).toAbsolutePath();
+            Files.createDirectories(output);
+            Method enableProfiling = opts.getClass().getMethod("enableProfiling", String.class);
+            enableProfiling.invoke(opts, output.resolve(name + "-profile").toString());
+            LOG.info("Writing ONNX Runtime profile for '{}' to {}", name, output);
+        } catch (ReflectiveOperationException | IOException e) {
+            LOG.warn("Could not enable ONNX Runtime profiling for '{}': {}", name, e.getMessage());
+        }
     }
 
     private static List<String> resolveProviderOrder(String configuredProvider) {
