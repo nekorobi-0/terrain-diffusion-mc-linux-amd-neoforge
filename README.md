@@ -145,6 +145,8 @@ This expects a matching patched ONNX Runtime Java artifact to be available throu
 
 ## Linux AMD Notes
 
+Japanese installation guide: [docs/INSTALL_JA.md](docs/INSTALL_JA.md).
+
 Detailed notes for the AMD/Linux port are in [docs/amd-linux-migraphx.md](docs/amd-linux-migraphx.md).
 
 ## Common Issues
