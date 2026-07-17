@@ -179,18 +179,21 @@ public final class LocalTerrainProvider {
 
         int scale = WorldScaleManager.getCurrentScale();
         FutureTask<HeightmapData> task = new FutureTask<>(() -> {
+            long generationStartNanos = System.nanoTime();
             long computedWindowCountBefore = pipeline.getTotalComputedWindowCount();
             HeightmapData data = scale <= 1
                     ? handle1x(i1, j1, i2, j2)
                     : handleUpsampled(i1, j1, i2, j2, scale);
             long computedWindowCountAfter = pipeline.getTotalComputedWindowCount();
+            long generationElapsedMillis = (System.nanoTime() - generationStartNanos) / 1_000_000L;
 
             long newlyComputedWindowCount = computedWindowCountAfter - computedWindowCountBefore;
             int regionWidth = j2 - j1;
             int regionHeight = i2 - i1;
             LOG.info(
-                    "Terrain Diffusion ({}) finished generating region {}x{} ({} newly computed windows)",
-                    OnnxModel.getResolvedInferenceProvider(), regionWidth, regionHeight, newlyComputedWindowCount);
+                    "Terrain Diffusion ({}) finished generating region {}x{} in {} ms ({} newly computed windows)",
+                    OnnxModel.getResolvedInferenceProvider(), regionWidth, regionHeight,
+                    generationElapsedMillis, newlyComputedWindowCount);
             synchronized (CACHE_LOCK) {
                 CACHE.put(key, data);
                 evictLruTo(MAX_CACHE_SIZE);
