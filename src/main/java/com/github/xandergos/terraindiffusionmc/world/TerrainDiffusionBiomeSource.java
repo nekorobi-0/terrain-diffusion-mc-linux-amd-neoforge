@@ -30,9 +30,14 @@ public final class TerrainDiffusionBiomeSource extends BiomeSource {
                 Map.entry((short) 5, biomes.getOrThrow(Biomes.DESERT)), Map.entry((short) 6, biomes.getOrThrow(Biomes.SWAMP)),
                 Map.entry((short) 8, biomes.getOrThrow(Biomes.FOREST)), Map.entry((short) 15, biomes.getOrThrow(Biomes.TAIGA)),
                 Map.entry((short) 16, biomes.getOrThrow(Biomes.SNOWY_TAIGA)), Map.entry((short) 17, biomes.getOrThrow(Biomes.SAVANNA)),
-                Map.entry((short) 23, biomes.getOrThrow(Biomes.JUNGLE)), Map.entry((short) 26, biomes.getOrThrow(Biomes.BADLANDS)),
-                Map.entry((short) 29, biomes.getOrThrow(Biomes.MEADOW)), Map.entry((short) 31, biomes.getOrThrow(Biomes.GROVE)),
-                Map.entry((short) 108, biomes.getOrThrow(Biomes.FOREST)), Map.entry((short) 115, biomes.getOrThrow(Biomes.TAIGA)), Map.entry((short) 116, biomes.getOrThrow(Biomes.SNOWY_TAIGA)));
+                Map.entry((short) 19, biomes.getOrThrow(Biomes.WINDSWEPT_HILLS)), Map.entry((short) 23, biomes.getOrThrow(Biomes.JUNGLE)),
+                Map.entry((short) 26, biomes.getOrThrow(Biomes.BADLANDS)), Map.entry((short) 29, biomes.getOrThrow(Biomes.MEADOW)),
+                Map.entry((short) 31, biomes.getOrThrow(Biomes.GROVE)), Map.entry((short) 32, biomes.getOrThrow(Biomes.SNOWY_SLOPES)),
+                Map.entry((short) 33, biomes.getOrThrow(Biomes.FROZEN_PEAKS)), Map.entry((short) 35, biomes.getOrThrow(Biomes.STONY_PEAKS)),
+                Map.entry((short) 41, biomes.getOrThrow(Biomes.WARM_OCEAN)), Map.entry((short) 44, biomes.getOrThrow(Biomes.OCEAN)),
+                Map.entry((short) 46, biomes.getOrThrow(Biomes.COLD_OCEAN)), Map.entry((short) 48, biomes.getOrThrow(Biomes.FROZEN_OCEAN)),
+                Map.entry((short) 108, biomes.getOrThrow(Biomes.FOREST)), Map.entry((short) 115, biomes.getOrThrow(Biomes.TAIGA)),
+                Map.entry((short) 116, biomes.getOrThrow(Biomes.SNOWY_TAIGA)));
         return idMap;
     }
     @Override protected Stream<Holder<Biome>> collectPossibleBiomes() { return ids().values().stream(); }
