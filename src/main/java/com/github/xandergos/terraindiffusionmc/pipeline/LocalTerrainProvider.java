@@ -71,6 +71,7 @@ public final class LocalTerrainProvider {
         return t;
     });
     private static final AtomicLong INFERENCE_TASK_SEQUENCE = new AtomicLong();
+    private static final AtomicLong CACHE_EPOCH = new AtomicLong();
 
     private static volatile LocalTerrainProvider INSTANCE;
     private static long instanceSeed;
@@ -94,6 +95,7 @@ public final class LocalTerrainProvider {
             instanceSeed = seed;
             synchronized (CACHE_LOCK) { CACHE.clear(); }
             PENDING.clear();
+            CACHE_EPOCH.incrementAndGet();
         }
     }
 
@@ -113,6 +115,12 @@ public final class LocalTerrainProvider {
             CACHE.clear();
         }
         PENDING.clear();
+        CACHE_EPOCH.incrementAndGet();
+    }
+
+    /** Changes whenever cached tile data can no longer be reused by a caller-local fast path. */
+    public static long cacheEpoch() {
+        return CACHE_EPOCH.get();
     }
 
     // =========================================================================
@@ -154,6 +162,7 @@ public final class LocalTerrainProvider {
             instanceSeed = newSeed;
             synchronized (CACHE_LOCK) { CACHE.clear(); }
             PENDING.clear();
+            CACHE_EPOCH.incrementAndGet();
             return null;
         });
     }

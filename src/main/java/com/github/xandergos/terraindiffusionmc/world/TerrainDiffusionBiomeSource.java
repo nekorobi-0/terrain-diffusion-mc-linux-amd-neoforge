@@ -19,6 +19,7 @@ import net.minecraft.world.level.biome.Climate;
 public final class TerrainDiffusionBiomeSource extends BiomeSource {
     public static final MapCodec<TerrainDiffusionBiomeSource> CODEC = RecordCodecBuilder.mapCodec(instance -> instance.group(RegistryOps.retrieveGetter(Registries.BIOME)).apply(instance, TerrainDiffusionBiomeSource::new));
     private final HolderGetter<Biome> biomes;
+    private final ThreadLocal<TileCache> tileCache = new ThreadLocal<>();
     private Map<Short, Holder<Biome>> idMap;
 
     public TerrainDiffusionBiomeSource(HolderGetter<Biome> biomes) { this.biomes = biomes; }
@@ -38,12 +39,23 @@ public final class TerrainDiffusionBiomeSource extends BiomeSource {
     @Override public Holder<Biome> getNoiseBiome(int x, int y, int z, Climate.Sampler sampler) {
         int blockX = QuartPos.toBlock(x), blockZ = QuartPos.toBlock(z), size = TerrainDiffusionConfig.tileSize(), shift = Integer.numberOfTrailingZeros(size);
         int startX = (blockX >> shift) << shift, startZ = (blockZ >> shift) << shift;
-        LocalTerrainProvider.HeightmapData data = LocalTerrainProvider.getInstance().fetchHeightmap(startZ, startX, startZ + size, startX + size);
+        long cacheEpoch = LocalTerrainProvider.cacheEpoch();
+        TileCache cached = tileCache.get();
+        LocalTerrainProvider.HeightmapData data;
+        if (cached != null && cached.epoch == cacheEpoch && cached.startX == startX && cached.startZ == startZ) {
+            data = cached.data;
+        } else {
+            data = LocalTerrainProvider.getInstance().fetchHeightmap(startZ, startX, startZ + size, startX + size);
+            tileCache.set(new TileCache(cacheEpoch, startX, startZ, data));
+        }
         if (data != null && data.biomeIds != null) {
             int localX = Math.max(0, Math.min(data.width - 1, blockX - startX)), localZ = Math.max(0, Math.min(data.height - 1, blockZ - startZ));
             Holder<Biome> result = ids().get(data.biomeIds[localZ][localX]);
             if (result != null) return result;
         }
         return ids().get((short) 1);
+    }
+
+    private record TileCache(long epoch, int startX, int startZ, LocalTerrainProvider.HeightmapData data) {
     }
 }
